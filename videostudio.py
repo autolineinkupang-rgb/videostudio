@@ -101,8 +101,15 @@ def run_clipper(args):
         sys.exit(1)
     print(f"[INFO] {len(timestamps)} momen siap dipotong.")
 
-    # Fragmen filter opsional untuk dilebur dalam satu pass encode.
-    color_fragment = color_grader.build_effects_filter() if args.effects else ""
+    # Fragmen filter warna untuk dilebur dalam satu pass encode.
+    # Prioritas: LUT (--lut atau auto efek/) → grade + efek opsional;
+    # tanpa LUT → perilaku lama (hanya --effects, selain itu polos).
+    lut = utils.resolve_path(args.lut) if args.lut else color_grader.find_lut(EFEK_DIR)
+    if lut:
+        print(f"[INFO] LUT: {os.path.basename(lut)}")
+        color_fragment = color_grader.build_color_filter(lut=lut, effects=args.effects)
+    else:
+        color_fragment = color_grader.build_effects_filter() if args.effects else ""
 
     subtitle_provider = None
     if args.subtitle:
@@ -372,7 +379,7 @@ def build_parser():
                    help="Ambil cookies dari browser")
     p.add_argument("--subtitle", action="store_true", help="Bakar subtitle ke klip")
     p.add_argument("--style", choices=["HYPE", "KARAOKE", "PODCAST", "CLEAN"], default="CLEAN", help="Style subtitle")
-    p.add_argument("--lut", help="File LUT .cube (mode single)")
+    p.add_argument("--lut", help="File LUT .cube (mode single & clipper; auto dari efek/ bila kosong)")
     p.add_argument("--music", help="File background music")
     p.add_argument("--music-topic", choices=music_finder.TOPICS,
                    help="Download BGM royalty-free per topik ke music_lib/ (alternatif --music)")

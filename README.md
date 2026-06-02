@@ -80,7 +80,7 @@ Silence cut → ambil segmen terkeras → gabung → background music. Klip sumb
 | `--style {HYPE,KARAOKE,PODCAST,CLEAN}` | Style subtitle |
 | `--blur-background`, `-b` | Paksa background blur untuk sumber landscape |
 | `--smart-crop` / `--no-smart-crop` | Crop fokus ke wajah/subjek (default aktif; perlu OpenCV). Tanpa wajah → fallback blur/center |
-| `--lut FILE.cube` | Terapkan LUT (mode single) |
+| `--lut FILE.cube` | Terapkan LUT warna (mode single & clipper; otomatis dari `efek/` bila kosong) |
 | `--music FILE` / `--music-vol 0.2` / `--no-music` | Kontrol background music |
 | `--music-topic {tech,motivation,gaming,vlog,educational,drama,funny,chill}` | Download BGM royalty-free per topik ke `music_lib/` |
 | `--max-clips N` | Batasi jumlah klip (clipper) |
