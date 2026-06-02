@@ -26,6 +26,9 @@ temp/*
 *.swp
 .DS_Store
 
+# Secrets / environment (jangan commit; pakai .env.example sebagai template)
+.env
+
 # Claude Code lokal
 .claude/
 

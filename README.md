@@ -7,7 +7,7 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - **3 mode dalam 1 runner** — `clipper`, `single`, `compile`.
 - **Download otomatis** dari YouTube via `yt-dlp` (dukung cookies untuk video login).
 - **Transkripsi** dengan `openai-whisper` atau `faster-whisper` (Indonesia/English/auto).
-- **Deteksi momen menarik** untuk memotong klip secara otomatis.
+- **Deteksi momen menarik** untuk memotong klip secara otomatis (heuristik), atau **pilih cuplikan via AI/LLM** (`--ai-moments`, free-tier Gemini/Groq).
 - **Subtitle burning dinamis** — muncul sinkron per-segmen/frasa (bukan satu blok statis), 4 style siap pakai: `HYPE`, `KARAOKE`, `PODCAST`, `CLEAN`.
 - **Subtitle siap-pakai dari folder `subtitle/`** — taruh file `.srt` di sana → dipakai langsung (transkripsi Whisper dilewati), bisa Anda koreksi manual.
 - **Loop koreksi subtitle** — subtitle hasil transkripsi otomatis disalin ke `subtitle/`; koreksi file-nya lalu jalankan ulang → video dirender dengan subtitle yang sudah diperbaiki (tanpa transkripsi ulang).
@@ -85,12 +85,36 @@ Silence cut → ambil segmen terkeras → gabung → background music. Klip sumb
 | `--lut FILE.cube` | Terapkan LUT warna (mode single & clipper; otomatis dari `efek/` bila kosong) |
 | `--music FILE` / `--music-vol 0.2` / `--no-music` | Kontrol background music |
 | `--music-topic {tech,motivation,gaming,vlog,educational,drama,funny,chill}` | Download BGM royalty-free per topik ke `music_lib/` |
+| `--ai-moments` | Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di `.env`) |
+| `--ai-provider {gemini,groq}` | Provider AI (default: `AI_PROVIDER` di `.env`, atau `gemini`) |
 | `--max-clips N` | Batasi jumlah klip (clipper) |
 | `--duration N` | Durasi target (compile) |
 | `--cookies FILE` / `--browser-cookies` | Cookies untuk video yang butuh login |
 | `--keep-temp` | Jangan hapus folder `temp/` |
 
 Selengkapnya: `videostudio.py --help`.
+
+## 🤖 Fitur AI (opsional)
+
+Pemilihan cuplikan terbaik bisa memakai LLM **free-tier** (Google Gemini atau Groq) — tanpa
+dependensi baru (REST via stdlib). Semua opt-in; tanpa key, pipeline tetap jalan dengan
+**fallback** ke deteksi momen heuristik.
+
+```bash
+# 1) Siapkan key (sekali):
+cp .env.example .env          # lalu isi GEMINI_API_KEY atau GROQ_API_KEY
+#   Gemini (gratis): https://aistudio.google.com/apikey
+#   Groq   (gratis): https://console.groq.com/keys
+
+# 2) Pakai:
+.venv/bin/python videostudio.py --mode clipper "URL" \
+  --ai-moments --ai-provider gemini --subtitle --max-clips 5
+```
+
+Key dibaca dari `.env` / environment (`GEMINI_API_KEY`, `GROQ_API_KEY`, `AI_PROVIDER`,
+opsional `GEMINI_MODEL`/`GROQ_MODEL`). File `.env` **tidak ikut di-commit**.
+
+> Fase berikutnya (belum ada): `--ai-clean` untuk membuang jeda & filler-word otomatis.
 
 ## 🗂️ Struktur Proyek
 
@@ -112,7 +136,9 @@ videostudio/
     ├── audio_mixer.py       # Mixing background music
     ├── music_finder.py      # Cari musik royalty-free per topik
     ├── reporter.py          # Generate report.txt
-    └── utils.py             # Utilitas bersama + loader config
+    ├── ai_client.py         # Klien LLM free-tier (Gemini/Groq) via REST
+    ├── ai_director.py       # Pilih cuplikan terbaik via LLM (--ai-moments)
+    └── utils.py             # Utilitas bersama + loader config + .env
 ```
 
 Folder kerja (`input/`, `sound/`, `efek/`, `subtitle/`, `output/`, `temp/`, dll.) di-*ignore* oleh git kecuali penanda `.gitkeep`.

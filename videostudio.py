@@ -10,6 +10,7 @@ Dioptimasi untuk hardware mid-range tanpa GPU (libx264, serial, RAM-safe).
 """
 import argparse
 import glob
+import json
 import os
 import shutil
 import sys
@@ -23,6 +24,7 @@ if SCRIPT_DIR not in sys.path:
 from modules import (  # noqa: E402
     utils, downloader, transcriber, moment_detector, encoder,
     subtitle_burner, color_grader, audio_mixer, music_finder, reporter,
+    ai_client, ai_director,
 )
 
 CFG = utils.load_config()
@@ -111,11 +113,34 @@ def run_clipper(args):
         except Exception as exc:
             print(f"[WARNING] Transkripsi gagal: {exc}")
 
-    print("[3/6] Deteksi momen menarik...")
+    print("[3/6] Pilih momen menarik...")
     timestamps_path = os.path.join(TEMP_DIR, "timestamps.json")
-    timestamps = moment_detector.detect_moments(
-        mp4_path, segments, duration=duration, timestamps_out=timestamps_path
-    )
+    timestamps = []
+
+    # Opsi AI: LLM memilih cuplikan terbaik dari transkrip. Fallback ke heuristik.
+    if args.ai_moments:
+        provider = args.ai_provider or os.environ.get("AI_PROVIDER", "gemini")
+        if not segments:
+            print("[WARNING] Tidak ada transkrip untuk AI — fallback ke deteksi heuristik.")
+        elif not ai_client.available(provider):
+            print(f"[WARNING] Key AI '{provider}' tidak ada (set di .env) — fallback heuristik.")
+        else:
+            print(f"[INFO] Memilih momen via AI ({provider})...")
+            timestamps = ai_director.select_moments(
+                segments, duration, max_clips=args.max_clips, provider=provider
+            )
+            if timestamps:
+                utils.ensure_parent_dir(timestamps_path)
+                with open(timestamps_path, "w", encoding="utf-8") as fh:
+                    json.dump(timestamps, fh, indent=2, ensure_ascii=False)
+                print(f"[INFO] AI memilih {len(timestamps)} momen.")
+            else:
+                print("[WARNING] AI tidak mengembalikan momen valid — fallback heuristik.")
+
+    if not timestamps:
+        timestamps = moment_detector.detect_moments(
+            mp4_path, segments, duration=duration, timestamps_out=timestamps_path
+        )
     if not timestamps:
         print("[ERROR] Tidak ada momen terdeteksi. Pipeline dihentikan.")
         sys.exit(1)
@@ -436,7 +461,7 @@ def build_parser():
     )
     p.add_argument("source", nargs="?", default=None, help="URL YouTube (clipper) atau path file (single)")
     p.add_argument("--mode", choices=["clipper", "single", "compile"], default="clipper", help="Pilih mode pipeline")
-    p.add_argument("--model", choices=["tiny", "base", "small"], default=CFG["transcription"]["model"], help="Model Whisper")
+    p.add_argument("--model", choices=["tiny", "base", "small", "medium"], default=CFG["transcription"]["model"], help="Model Whisper (medium = lebih akurat tapi berat di 8GB)")
     p.add_argument("--engine", choices=["whisper", "faster"], default=CFG["transcription"]["engine"], help="Engine transkripsi")
     p.add_argument("--lang", default=CFG["transcription"]["lang"], help="Bahasa transkripsi (id/en/auto)")
     p.add_argument("--cookies", help="File cookies untuk video yang butuh login")
@@ -460,6 +485,10 @@ def build_parser():
     p.add_argument("--no-smart-crop", dest="smart_crop", action="store_false",
                    help="Matikan smart-crop (pakai center-crop / blur)")
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
+    p.add_argument("--ai-moments", action="store_true",
+                   help="Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di .env)")
+    p.add_argument("--ai-provider", choices=["gemini", "groq"], default=None,
+                   help="Provider AI (default: env AI_PROVIDER atau gemini)")
     p.add_argument("--max-clips", type=int, default=None, help="Batasi jumlah klip (clipper)")
     p.add_argument("--duration", type=int, default=CFG["compile"]["target_duration"], help="Durasi target (compile)")
     p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
@@ -467,6 +496,7 @@ def build_parser():
 
 
 def main():
+    utils.load_dotenv()  # muat .env (API key fitur AI) bila ada
     args = build_parser().parse_args()
 
     missing = utils.check_dependencies(("ffmpeg", "ffprobe"))

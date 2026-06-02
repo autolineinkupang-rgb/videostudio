@@ -80,6 +80,27 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return config
 
 
+def load_dotenv(path: Optional[str] = None) -> None:
+    """Muat file .env sederhana (KEY=VALUE) ke os.environ bila belum diset.
+    Tanpa dependensi. Baris komentar (#) & kosong diabaikan. Aman bila tak ada."""
+    env_path = Path(path) if path else (ROOT_DIR / ".env")
+    if not env_path.exists():
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except Exception:
+        pass
+
+
 def ensure_dir(path: str) -> str:
     """Pastikan folder ada; kembalikan path-nya."""
     os.makedirs(path, exist_ok=True)

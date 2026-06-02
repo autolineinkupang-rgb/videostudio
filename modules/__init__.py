@@ -14,4 +14,6 @@ __all__ = [
     "music_finder",
     "reporter",
     "smart_crop",
+    "ai_client",
+    "ai_director",
 ]
