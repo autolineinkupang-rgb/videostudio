@@ -31,6 +31,3 @@ temp/*
 
 # Claude Code lokal
 .claude/
-
-# Catatan/penjelasan lokal (tidak ikut di-commit)
-PENJELASAN-README.md
