@@ -12,6 +12,7 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import utils
+from .smart_crop import compute_crop_x
 
 _CFG = utils.load_config()
 THREADS = _CFG["encode"]["threads"]
@@ -30,8 +31,14 @@ A_RATE = _CFG["audio"]["sample_rate"]
 A_CHANNELS = _CFG["audio"]["channels"]
 
 
-def build_reframe_filter(blur_background: bool = False) -> str:
-    """Filter reframe ke 9:16. Crop tengah, atau blur background untuk landscape."""
+def build_reframe_filter(blur_background: bool = False, crop_x: Optional[int] = None) -> str:
+    """Filter reframe ke 9:16.
+
+    - blur_background: fit penuh + background blur (tak memotong subjek).
+    - crop_x (px, ruang frame ter-scale): crop dengan offset horizontal ke
+      subjek (smart-crop). Offset di-clamp via ekspresi agar tak keluar batas.
+    - default: center crop.
+    """
     if blur_background:
         return (
             f"split[bg_src][fg_src];"
@@ -39,6 +46,13 @@ def build_reframe_filter(blur_background: bool = False) -> str:
             f"crop={WIDTH}:{HEIGHT},boxblur=20:10[bg];"
             f"[fg_src]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+        )
+    if crop_x is not None:
+        # Koma di dalam ekspresi crop di-escape (\\,) agar tidak dianggap pemisah filter.
+        x_expr = f"min(max({int(crop_x)}\\,0)\\,in_w-{WIDTH})"
+        return (
+            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={WIDTH}:{HEIGHT}:{x_expr}:(in_h-{HEIGHT})/2"
         )
     return f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT}"
 
@@ -62,6 +76,7 @@ def build_punchy_audio() -> str:
 def compose_video_filter(
     duration: float,
     blur_background: bool = False,
+    crop_x: Optional[int] = None,
     color_fragment: str = "",
     overlay_fragment: str = "",
     subtitle_fragment: str = "",
@@ -72,7 +87,7 @@ def compose_video_filter(
     Fragmen kosong diabaikan; setiap fragmen non-kosong harus diawali koma
     (mis. ",eq=...") atau di-handle di sini.
     """
-    chain = build_reframe_filter(blur_background)
+    chain = build_reframe_filter(blur_background, crop_x=crop_x)
     chain += f",{build_fade_filter(duration)},format=yuv420p"
     for frag in (color_fragment, overlay_fragment, subtitle_fragment):
         if frag:
@@ -142,11 +157,16 @@ def cut_clips(
     color_fragment: str = "",
     audio_punchy: bool = False,
     subtitle_provider=None,
+    smart_crop: bool = False,
 ) -> List[Dict[str, Any]]:
     """Potong banyak klip dari timestamps (mode clipper). Cap ukuran < max_clip_mb.
 
     subtitle_provider(item, idx, start, end) -> fragmen filter subtitle (atau "").
     Disuntik dari runner agar encoder tidak bergantung pada subtitle_burner.
+
+    smart_crop: deteksi wajah per klip → crop berpusat subjek. Bila tak ada
+    wajah (atau OpenCV absen), fallback ke blur-background untuk sumber
+    landscape, atau center-crop untuk sumber lain.
     """
     input_video = utils.resolve_path(input_video)
     output_dir = utils.ensure_dir(utils.resolve_path(output_dir))
@@ -157,6 +177,9 @@ def cut_clips(
     selected = timestamps[:max_clips] if max_clips is not None else timestamps
     total = len(selected)
     infos: List[Dict[str, Any]] = []
+
+    src_w, src_h = utils.ffprobe_resolution(input_video) if smart_crop else (0, 0)
+    src_aspect = (src_w / src_h) if src_h else 0.0
 
     for idx, item in enumerate(selected, start=1):
         start = _read_ts(item, "start_sec", "start", 0.0)
@@ -174,8 +197,16 @@ def cut_clips(
         if subtitle_provider is not None:
             subtitle_fragment = subtitle_provider(item, idx, start, end) or ""
 
+        # Hybrid smart-crop: wajah → crop ber-offset; tanpa wajah & landscape → blur.
+        crop_x = None
+        effective_blur = blur_background
+        if smart_crop and not blur_background:
+            crop_x = compute_crop_x(input_video, start, dur, src_w, src_h, WIDTH, HEIGHT)
+            if crop_x is None and src_aspect >= 1.3:
+                effective_blur = True
+
         vf = compose_video_filter(
-            dur, blur_background=blur_background,
+            dur, blur_background=effective_blur, crop_x=crop_x,
             color_fragment=color_fragment, subtitle_fragment=subtitle_fragment,
         )
         af = build_audio_fade(dur) + (build_punchy_audio() if audio_punchy else "")
@@ -220,6 +251,7 @@ def reframe_single(
     color_fragment: str = "",
     overlay_fragment: str = "",
     subtitle_fragment: str = "",
+    smart_crop: bool = False,
 ) -> str:
     """Reframe 1 video lokal ke 9:16 + grade + overlay (mode single, satu pass)."""
     input_video = utils.resolve_path(input_video)
@@ -229,8 +261,17 @@ def reframe_single(
     if max_duration is not None and dur > max_duration:
         dur = max_duration
 
+    # Hybrid smart-crop (lihat cut_clips): wajah → crop ber-offset; else blur/center.
+    crop_x = None
+    effective_blur = blur_background
+    if smart_crop and not blur_background:
+        sw, sh = utils.ffprobe_resolution(input_video)
+        crop_x = compute_crop_x(input_video, 0.0, dur, sw, sh, WIDTH, HEIGHT)
+        if crop_x is None and sh and (sw / sh) >= 1.3:
+            effective_blur = True
+
     vf = compose_video_filter(
-        dur, blur_background=blur_background,
+        dur, blur_background=effective_blur, crop_x=crop_x,
         color_fragment=color_fragment, overlay_fragment=overlay_fragment,
         subtitle_fragment=subtitle_fragment,
     )

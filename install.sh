@@ -70,6 +70,15 @@ check_import "numpy"
 check_import "psutil"
 check_import "yaml"
 
+# OpenCV opsional (untuk --smart-crop). Tidak fatal bila tidak ada.
+if "$PY" - <<'PY' >/dev/null 2>&1
+import cv2  # noqa: F401
+PY
+then ok "import cv2 (smart-crop)"; else
+  echo "[i] OpenCV belum ada — fitur --smart-crop akan fallback ke center/blur."
+  echo "    Pasang: $PY -m pip install opencv-python-headless"
+fi
+
 mkdir -p input sound music_lib efek output/clips temp
 
 # Kembalikan kepemilikan ke user jika dijalankan via sudo.

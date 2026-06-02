@@ -6,4 +6,6 @@ psutil>=5.9.0
 numpy>=1.26.0
 PyYAML>=6.0
 auto-editor>=24.0.0
+# Opsional: smart-crop deteksi wajah (--smart-crop). Tanpa ini → fallback center/blur.
+opencv-python-headless>=4.9.0
 

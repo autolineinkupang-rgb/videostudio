@@ -8,10 +8,10 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - **Download otomatis** dari YouTube via `yt-dlp` (dukung cookies untuk video login).
 - **Transkripsi** dengan `openai-whisper` atau `faster-whisper` (Indonesia/English/auto).
 - **Deteksi momen menarik** untuk memotong klip secara otomatis.
-- **Subtitle burning** dengan 4 style siap pakai: `HYPE`, `KARAOKE`, `PODCAST`, `CLEAN`.
+- **Subtitle burning dinamis** — muncul sinkron per-segmen/frasa (bukan satu blok statis), 4 style siap pakai: `HYPE`, `KARAOKE`, `PODCAST`, `CLEAN`.
 - **Color grading** (LUT `.cube`, vignette, teks overlay) & **silence cut** via `auto-editor`.
 - **Background music** royalty-free + audio mixing (file sendiri, auto-scan `sound/`, atau download per topik via `--music-topic`).
-- **Reframe 9:16** dengan opsi background blur untuk sumber landscape.
+- **Reframe 9:16** dengan **smart-crop** (deteksi wajah, fokus ke subjek) + fallback otomatis ke background blur / center-crop.
 - **Laporan** ringkasan hasil di `output/report.txt`.
 
 ## 📦 Kebutuhan Sistem
@@ -21,7 +21,7 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - Python 3.10+ dengan `python3-venv`
 - Font DejaVu (`fonts-dejavu`)
 
-Dependensi Python ada di [`requirements.txt`](requirements.txt): `yt-dlp`, `openai-whisper`, `faster-whisper`, `auto-editor`, `psutil`, `numpy`, `PyYAML`.
+Dependensi Python ada di [`requirements.txt`](requirements.txt): `yt-dlp`, `openai-whisper`, `faster-whisper`, `auto-editor`, `psutil`, `numpy`, `PyYAML`, dan `opencv-python-headless` (opsional, untuk smart-crop).
 
 ## 🚀 Instalasi
 
@@ -78,7 +78,8 @@ Silence cut → ambil segmen terkeras → gabung → background music. Klip sumb
 | `--lang id\|en\|auto` | Bahasa transkripsi |
 | `--subtitle` | Bakar subtitle ke klip |
 | `--style {HYPE,KARAOKE,PODCAST,CLEAN}` | Style subtitle |
-| `--blur-background`, `-b` | Background blur untuk sumber landscape |
+| `--blur-background`, `-b` | Paksa background blur untuk sumber landscape |
+| `--smart-crop` / `--no-smart-crop` | Crop fokus ke wajah/subjek (default aktif; perlu OpenCV). Tanpa wajah → fallback blur/center |
 | `--lut FILE.cube` | Terapkan LUT (mode single) |
 | `--music FILE` / `--music-vol 0.2` / `--no-music` | Kontrol background music |
 | `--music-topic {tech,motivation,gaming,vlog,educational,drama,funny,chill}` | Download BGM royalty-free per topik ke `music_lib/` |
@@ -103,7 +104,8 @@ videostudio/
     ├── transcriber.py       # Transkripsi (whisper / faster-whisper)
     ├── moment_detector.py   # Deteksi momen menarik
     ├── encoder.py           # Potong & re-encode (libx264)
-    ├── subtitle_burner.py   # Burn subtitle (4 style)
+    ├── subtitle_burner.py   # Burn subtitle dinamis (4 style)
+    ├── smart_crop.py        # Smart-crop deteksi wajah (OpenCV) untuk reframe
     ├── color_grader.py      # LUT, vignette, teks overlay
     ├── audio_mixer.py       # Mixing background music
     ├── music_finder.py      # Cari musik royalty-free per topik

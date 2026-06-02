@@ -107,11 +107,21 @@ def run_clipper(args):
     subtitle_provider = None
     if args.subtitle:
         def subtitle_provider(item, idx, start, end):
-            transcript = item.get("transcript", "")
-            if not transcript:
-                return ""
             ass_path = os.path.join(TEMP_DIR, f"clip_{idx:02d}.ass")
-            ass = subtitle_burner.make_clip_ass(transcript, end - start, ass_path, style=args.style)
+            # Subtitle dinamis: segmen Whisper yang overlap jendela klip [start,end].
+            window = [s for s in segments if s.end > start and s.start < end]
+            ass = None
+            if window:
+                ass = subtitle_burner.make_clip_ass_timed(
+                    window, start, end - start, ass_path, style=args.style,
+                )
+            if not ass:
+                # Fallback: blok statis (klip fallback tanpa segmen / transkripsi gagal).
+                transcript = item.get("transcript", "")
+                if transcript:
+                    ass = subtitle_burner.make_clip_ass(
+                        transcript, end - start, ass_path, style=args.style,
+                    )
             return subtitle_burner.build_filter(ass) if ass else ""
 
     print("[4/6] Potong & encode klip (serial, 1 per 1)...")
@@ -119,7 +129,7 @@ def run_clipper(args):
         mp4_path, timestamps, CLIPS_DIR, title,
         max_clips=args.max_clips, blur_background=args.blur_background,
         color_fragment=color_fragment, audio_punchy=args.effects,
-        subtitle_provider=subtitle_provider,
+        subtitle_provider=subtitle_provider, smart_crop=args.smart_crop,
     )
 
     print("[5/6] Background music (opsional)...")
@@ -209,6 +219,7 @@ def run_single(args):
             work_input, reframed, max_duration=60.0,
             blur_background=args.blur_background, color_fragment=color_fragment,
             overlay_fragment=overlay_fragment, subtitle_fragment=subtitle_fragment,
+            smart_crop=args.smart_crop,
         )
     except Exception as exc:
         print(f"[ERROR] Reframe gagal: {exc}")
@@ -369,6 +380,10 @@ def build_parser():
     p.add_argument("--text", help="Teks overlay tengah bawah (single)")
     p.add_argument("--channel", default="@YourChannel", help="Nama channel kiri atas (single)")
     p.add_argument("--blur-background", "-b", action="store_true", help="Background blur untuk video landscape")
+    p.add_argument("--smart-crop", dest="smart_crop", action="store_true", default=True,
+                   help="Crop fokus ke wajah/subjek (default aktif; perlu OpenCV)")
+    p.add_argument("--no-smart-crop", dest="smart_crop", action="store_false",
+                   help="Matikan smart-crop (pakai center-crop / blur)")
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
     p.add_argument("--max-clips", type=int, default=None, help="Batasi jumlah klip (clipper)")
     p.add_argument("--duration", type=int, default=CFG["compile"]["target_duration"], help="Durasi target (compile)")
