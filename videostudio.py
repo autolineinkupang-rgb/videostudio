@@ -103,9 +103,11 @@ def run_clipper(args):
                 ext_srt = None
     if not ext_srt:
         try:
-            segments, _text, _srt = transcriber.transcribe(
+            segments, _text, srt_made = transcriber.transcribe(
                 mp4_path, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
             )
+            # Simpan salinan ke subtitle/ agar bisa dikoreksi & dipakai ulang.
+            save_subtitle_copy(srt_made, metadata.get("id") or title)
         except Exception as exc:
             print(f"[WARNING] Transkripsi gagal: {exc}")
 
@@ -195,16 +197,18 @@ def run_single(args):
         sys.exit(1)
 
     basename = utils.sanitize_filename(os.path.splitext(os.path.basename(source))[0])
-    raw_basename = os.path.splitext(os.path.basename(source))[0]
     work_input = source
 
     # Subtitle eksternal dari folder subtitle/ (timestamp relatif ke video ASLI).
-    # Bila dipakai, silence-cut dinonaktifkan agar timing tetap pas.
-    ext_srt = utils.find_subtitle_file(SUBTITLE_DIR, raw_basename) if args.subtitle else None
+    ext_srt = utils.find_subtitle_file(SUBTITLE_DIR, basename) if args.subtitle else None
+    # Subtitle (eksternal maupun hasil transkripsi) bertimestamp ke video ASLI,
+    # jadi silence-cut dinonaktifkan saat --subtitle agar timing tetap pas dan
+    # SRT yang disimpan bisa dikoreksi & dipakai ulang.
     skip_auto = args.no_auto
-    if ext_srt and not args.no_auto:
-        print(f"[INFO] Subtitle eksternal terdeteksi ({os.path.basename(ext_srt)}) "
-              "→ silence-cut dinonaktifkan agar timing subtitle tetap pas.")
+    if args.subtitle and not args.no_auto:
+        sumber = "eksternal" if ext_srt else "hasil transkripsi"
+        print(f"[INFO] --subtitle aktif (subtitle {sumber}) → silence-cut dinonaktifkan "
+              "agar timing subtitle tetap pas.")
         skip_auto = True
 
     # [1] Silence cut dengan auto-editor (opsional).
@@ -224,7 +228,7 @@ def run_single(args):
         else:
             print("[WARNING] auto-editor tidak ditemukan — lewati (pakai --no-auto untuk diam).")
     else:
-        alasan = "subtitle eksternal" if ext_srt and not args.no_auto else "--no-auto"
+        alasan = "--subtitle" if (args.subtitle and not args.no_auto) else "--no-auto"
         print(f"[1/4] Silence cut dilewati ({alasan}).")
 
     # [2-3] Reframe 9:16 + color grade + overlay + subtitle (satu pass).
@@ -246,6 +250,8 @@ def run_single(args):
                     work_input, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
                 )
                 if srt:
+                    # Simpan salinan ke subtitle/ agar bisa dikoreksi & render ulang.
+                    save_subtitle_copy(srt, basename)
                     ass = subtitle_burner.srt_to_ass(srt, ass_path, style=args.style)
                     subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
             except Exception as exc:
@@ -374,6 +380,28 @@ def run_compile(args):
 
 
 # ── Helper umum ───────────────────────────────────────────────────────────────
+
+def save_subtitle_copy(srt_src, key):
+    """Simpan salinan SRT hasil transkripsi ke folder subtitle/ agar bisa
+    dikoreksi lalu dipakai ulang (skip Whisper di run berikutnya).
+
+    Tidak menimpa file yang sudah ada (lindungi koreksi user). `key` = nama
+    video/id; dipakai sebagai nama file agar cocok saat pencarian ulang.
+    """
+    if not srt_src or not os.path.exists(srt_src):
+        return
+    safe = utils.sanitize_filename(key) or "subtitle"
+    dest = os.path.join(SUBTITLE_DIR, f"{safe}.srt")
+    if os.path.exists(dest):
+        return  # jangan timpa — mungkin sudah dikoreksi user
+    try:
+        utils.ensure_dir(SUBTITLE_DIR)
+        shutil.copy(srt_src, dest)
+        print(f"[INFO] Subtitle disimpan ke subtitle/{safe}.srt "
+              "— koreksi lalu jalankan ulang untuk memakai versi perbaikan.")
+    except Exception as exc:
+        print(f"[WARNING] Gagal menyimpan salinan subtitle: {exc}")
+
 
 def resolve_music(args):
     """Tentukan file musik: --music > --music-topic (download) > auto sound/ > None."""
