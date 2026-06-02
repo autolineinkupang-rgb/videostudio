@@ -15,6 +15,7 @@ input/*
 sound/*
 music_lib/*
 efek/*
+subtitle/*
 output/*
 temp/*
 !**/.gitkeep

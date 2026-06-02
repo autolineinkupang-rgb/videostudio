@@ -9,6 +9,7 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - **Transkripsi** dengan `openai-whisper` atau `faster-whisper` (Indonesia/English/auto).
 - **Deteksi momen menarik** untuk memotong klip secara otomatis.
 - **Subtitle burning dinamis** — muncul sinkron per-segmen/frasa (bukan satu blok statis), 4 style siap pakai: `HYPE`, `KARAOKE`, `PODCAST`, `CLEAN`.
+- **Subtitle siap-pakai dari folder `subtitle/`** — taruh file `.srt` di sana → dipakai langsung (transkripsi Whisper dilewati), bisa Anda koreksi manual.
 - **Color grading** (LUT `.cube`, vignette, teks overlay) & **silence cut** via `auto-editor`.
 - **Background music** royalty-free + audio mixing (file sendiri, auto-scan `sound/`, atau download per topik via `--music-topic`).
 - **Reframe 9:16** dengan **smart-crop** (deteksi wajah, fokus ke subjek) + fallback otomatis ke background blur / center-crop.
@@ -101,7 +102,7 @@ videostudio/
 ├── requirements.txt      # Dependensi Python
 └── modules/              # Modul per-tahap pipeline
     ├── downloader.py        # Download video + metadata (yt-dlp)
-    ├── transcriber.py       # Transkripsi (whisper / faster-whisper)
+    ├── transcriber.py       # Transkripsi (whisper / faster-whisper) + parse SRT folder subtitle/
     ├── moment_detector.py   # Deteksi momen menarik
     ├── encoder.py           # Potong & re-encode (libx264)
     ├── subtitle_burner.py   # Burn subtitle dinamis (4 style)
@@ -113,7 +114,11 @@ videostudio/
     └── utils.py             # Utilitas bersama + loader config
 ```
 
-Folder kerja (`input/`, `output/`, `temp/`, dll.) di-*ignore* oleh git kecuali penanda `.gitkeep`.
+Folder kerja (`input/`, `sound/`, `efek/`, `subtitle/`, `output/`, `temp/`, dll.) di-*ignore* oleh git kecuali penanda `.gitkeep`.
+
+> **Subtitle siap-pakai:** taruh file `.srt` di folder `subtitle/`. Bila ada, pipeline memakainya
+> (transkripsi Whisper dilewati). Nama file dicocokkan dengan nama video sumber, jika tak cocok
+> dipakai `.srt` pertama. Di mode single, silence-cut otomatis dinonaktifkan agar timing tetap pas.
 
 ## 🔧 Konfigurasi
 

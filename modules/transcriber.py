@@ -5,6 +5,7 @@ penulisan SRT dari short/auto_subtitle.sh. Model di-unload dari RAM setelah sele
 """
 import gc
 import os
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -24,6 +25,49 @@ def _format_srt_time(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds - int(seconds)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _srt_time_to_sec(t: str) -> float:
+    """Konversi 'HH:MM:SS,mmm' (atau '.mmm') ke detik."""
+    t = t.replace(",", ".").strip()
+    h, m, rest = t.split(":")
+    s, _, ms = rest.partition(".")
+    ms = (ms + "000")[:3] if ms else "0"
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def parse_srt(srt_path: str) -> List[Segment]:
+    """Parse file SRT (timestamp absolut) menjadi daftar Segment.
+
+    Dipakai untuk subtitle yang disediakan user di folder subtitle/ — sebagai
+    pengganti transkripsi Whisper (lebih cepat + teks bisa dikoreksi manual).
+    """
+    srt_path = utils.resolve_path(srt_path)
+    if not os.path.exists(srt_path):
+        raise RuntimeError(f"File subtitle tidak ditemukan: {srt_path}")
+    with open(srt_path, "r", encoding="utf-8", errors="replace") as fh:
+        content = fh.read()
+
+    segments: List[Segment] = []
+    for block in re.split(r"\n\s*\n", content.strip()):
+        lines = [ln for ln in block.strip().splitlines() if ln.strip()]
+        time_line = next((ln for ln in lines if "-->" in ln), None)
+        if not time_line:
+            continue
+        text_lines = [ln.strip() for ln in lines if "-->" not in ln and not ln.strip().isdigit()]
+        text = " ".join(text_lines).strip()
+        if not text:
+            continue
+        a, b = time_line.split("-->")
+        try:
+            start = _srt_time_to_sec(a)
+            end = _srt_time_to_sec(b.split()[0])
+        except Exception:
+            continue
+        if end < start:
+            end = start
+        segments.append(Segment(start=start, end=end, text=text))
+    return segments
 
 
 def write_srt(segments: List[Segment], srt_path: str) -> str:

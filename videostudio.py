@@ -33,12 +33,13 @@ MUSIC_LIB_DIR = os.path.join(ROOT, "music_lib")
 EFEK_DIR = os.path.join(ROOT, "efek")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 CLIPS_DIR = os.path.join(OUTPUT_DIR, "clips")
+SUBTITLE_DIR = os.path.join(ROOT, "subtitle")
 TEMP_DIR = os.path.join(ROOT, "temp")
 LOG_PATH = os.path.join(OUTPUT_DIR, "pipeline.log")
 
 
 def ensure_directories():
-    for path in (INPUT_DIR, SOUND_DIR, MUSIC_LIB_DIR, EFEK_DIR, OUTPUT_DIR, CLIPS_DIR, TEMP_DIR):
+    for path in (INPUT_DIR, SOUND_DIR, MUSIC_LIB_DIR, EFEK_DIR, SUBTITLE_DIR, OUTPUT_DIR, CLIPS_DIR, TEMP_DIR):
         utils.ensure_dir(path)
 
 
@@ -81,15 +82,32 @@ def run_clipper(args):
     if duration:
         print(f"[INFO] Durasi video: {duration / 60:.1f} menit.")
 
-    print("[2/6] Transkripsi audio...")
+    print("[2/6] Subtitle / transkripsi...")
     srt_path = os.path.join(TEMP_DIR, "subtitle.srt")
     segments = []
-    try:
-        segments, _text, _srt = transcriber.transcribe(
-            mp4_path, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
-        )
-    except Exception as exc:
-        print(f"[WARNING] Transkripsi gagal: {exc}")
+    # Subtitle eksternal dari folder subtitle/ → pakai sebagai sumber segmen
+    # (deteksi momen + burning), lewati Whisper. Fallback transkripsi bila gagal/kosong.
+    ext_srt = utils.find_subtitle_file(SUBTITLE_DIR, metadata.get("id", ""))
+    if ext_srt:
+        print(f"[INFO] Subtitle eksternal: {os.path.basename(ext_srt)} (transkripsi Whisper dilewati).")
+        try:
+            segments = transcriber.parse_srt(ext_srt)
+        except Exception as exc:
+            print(f"[WARNING] Gagal baca subtitle eksternal ({exc}); fallback transkripsi.")
+            ext_srt = None
+        else:
+            if segments:
+                print(f"[INFO] {len(segments)} segmen dibaca dari subtitle/.")
+            else:
+                print("[WARNING] Subtitle eksternal kosong; fallback transkripsi.")
+                ext_srt = None
+    if not ext_srt:
+        try:
+            segments, _text, _srt = transcriber.transcribe(
+                mp4_path, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
+            )
+        except Exception as exc:
+            print(f"[WARNING] Transkripsi gagal: {exc}")
 
     print("[3/6] Deteksi momen menarik...")
     timestamps_path = os.path.join(TEMP_DIR, "timestamps.json")
@@ -177,10 +195,20 @@ def run_single(args):
         sys.exit(1)
 
     basename = utils.sanitize_filename(os.path.splitext(os.path.basename(source))[0])
+    raw_basename = os.path.splitext(os.path.basename(source))[0]
     work_input = source
 
+    # Subtitle eksternal dari folder subtitle/ (timestamp relatif ke video ASLI).
+    # Bila dipakai, silence-cut dinonaktifkan agar timing tetap pas.
+    ext_srt = utils.find_subtitle_file(SUBTITLE_DIR, raw_basename) if args.subtitle else None
+    skip_auto = args.no_auto
+    if ext_srt and not args.no_auto:
+        print(f"[INFO] Subtitle eksternal terdeteksi ({os.path.basename(ext_srt)}) "
+              "→ silence-cut dinonaktifkan agar timing subtitle tetap pas.")
+        skip_auto = True
+
     # [1] Silence cut dengan auto-editor (opsional).
-    if not args.no_auto:
+    if not skip_auto:
         ae = find_auto_editor()
         if ae:
             cut_out = os.path.join(TEMP_DIR, f"{basename}_cut.mp4")
@@ -196,22 +224,32 @@ def run_single(args):
         else:
             print("[WARNING] auto-editor tidak ditemukan — lewati (pakai --no-auto untuk diam).")
     else:
-        print("[1/4] Silence cut dilewati (--no-auto).")
+        alasan = "subtitle eksternal" if ext_srt and not args.no_auto else "--no-auto"
+        print(f"[1/4] Silence cut dilewati ({alasan}).")
 
     # [2-3] Reframe 9:16 + color grade + overlay + subtitle (satu pass).
     subtitle_fragment = ""
     if args.subtitle:
-        print("[2/4] Transkripsi untuk subtitle...")
-        srt_path = os.path.join(TEMP_DIR, f"{basename}.srt")
-        try:
-            segs, _t, srt = transcriber.transcribe(
-                work_input, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
-            )
-            if srt:
-                ass = subtitle_burner.srt_to_ass(srt, os.path.join(TEMP_DIR, f"{basename}.ass"), style=args.style)
+        ass_path = os.path.join(TEMP_DIR, f"{basename}.ass")
+        if ext_srt:
+            print(f"[2/4] Subtitle dari folder: {os.path.basename(ext_srt)} (transkripsi dilewati).")
+            try:
+                ass = subtitle_burner.srt_to_ass(ext_srt, ass_path, style=args.style)
                 subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
-        except Exception as exc:
-            print(f"[WARNING] Subtitle dilewati: {exc}")
+            except Exception as exc:
+                print(f"[WARNING] Subtitle eksternal dilewati: {exc}")
+        else:
+            print("[2/4] Transkripsi untuk subtitle...")
+            srt_path = os.path.join(TEMP_DIR, f"{basename}.srt")
+            try:
+                segs, _t, srt = transcriber.transcribe(
+                    work_input, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
+                )
+                if srt:
+                    ass = subtitle_burner.srt_to_ass(srt, ass_path, style=args.style)
+                    subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
+            except Exception as exc:
+                print(f"[WARNING] Subtitle dilewati: {exc}")
     else:
         print("[2/4] Subtitle dilewati (tambah --subtitle untuk mengaktifkan).")
 

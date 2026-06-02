@@ -253,6 +253,23 @@ def find_video_in_dir(directory: str, exts=(".mp4", ".mov", ".mkv", ".webm", ".a
     return os.path.join(directory, files[0]) if files else None
 
 
+def find_subtitle_file(subtitle_dir: str, basename: str = "", exts=(".srt",)) -> Optional[str]:
+    """Cari file subtitle di folder. Utamakan stem yang cocok dengan `basename`,
+    fallback ke file pertama (alfabetis). None bila folder kosong/tidak ada."""
+    subtitle_dir = resolve_path(subtitle_dir)
+    if not os.path.isdir(subtitle_dir):
+        return None
+    files = sorted(f for f in os.listdir(subtitle_dir) if f.lower().endswith(exts))
+    if not files:
+        return None
+    if basename:
+        stem = os.path.splitext(os.path.basename(basename))[0].lower()
+        for f in files:
+            if os.path.splitext(f)[0].lower() == stem:
+                return os.path.join(subtitle_dir, f)
+    return os.path.join(subtitle_dir, files[0])
+
+
 def find_font(preferred: str) -> str:
     """Kembalikan font path valid; fallback ke fc-match jika preferred tidak ada."""
     if preferred and os.path.exists(preferred):
