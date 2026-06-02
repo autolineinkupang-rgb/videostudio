@@ -224,13 +224,21 @@ def run_single(args):
     basename = utils.sanitize_filename(os.path.splitext(os.path.basename(source))[0])
     work_input = source
 
+    # --- AI clean (opsional): buang filler/jeda/ngelantur lebih dulu ---
+    # Menghasilkan video bersih (jadi work_input) + segmen ter-remap utk subtitle.
+    ai_clean_segments = None
+    did_ai_clean = False
+    if args.ai_clean:
+        work_input, ai_clean_segments, did_ai_clean = run_ai_clean(args, source, basename)
+
     # Subtitle eksternal dari folder subtitle/ (timestamp relatif ke video ASLI).
-    ext_srt = utils.find_subtitle_file(SUBTITLE_DIR, basename) if args.subtitle else None
-    # Subtitle (eksternal maupun hasil transkripsi) bertimestamp ke video ASLI,
-    # jadi silence-cut dinonaktifkan saat --subtitle agar timing tetap pas dan
-    # SRT yang disimpan bisa dikoreksi & dipakai ulang.
-    skip_auto = args.no_auto
-    if args.subtitle and not args.no_auto:
+    # Diabaikan bila AI-clean dipakai (perlu transkrip mentah; subtitle dari hasil clean).
+    ext_srt = (utils.find_subtitle_file(SUBTITLE_DIR, basename)
+               if (args.subtitle and not did_ai_clean) else None)
+    # Subtitle bertimestamp ke video kerja, jadi silence-cut dinonaktifkan saat
+    # --subtitle (timing) — juga sudah tak perlu bila AI-clean aktif.
+    skip_auto = args.no_auto or did_ai_clean
+    if args.subtitle and not skip_auto:
         sumber = "eksternal" if ext_srt else "hasil transkripsi"
         print(f"[INFO] --subtitle aktif (subtitle {sumber}) → silence-cut dinonaktifkan "
               "agar timing subtitle tetap pas.")
@@ -253,14 +261,29 @@ def run_single(args):
         else:
             print("[WARNING] auto-editor tidak ditemukan — lewati (pakai --no-auto untuk diam).")
     else:
-        alasan = "--subtitle" if (args.subtitle and not args.no_auto) else "--no-auto"
+        if did_ai_clean:
+            alasan = "AI-clean"
+        elif args.subtitle and not args.no_auto:
+            alasan = "--subtitle"
+        else:
+            alasan = "--no-auto"
         print(f"[1/4] Silence cut dilewati ({alasan}).")
 
     # [2-3] Reframe 9:16 + color grade + overlay + subtitle (satu pass).
     subtitle_fragment = ""
     if args.subtitle:
         ass_path = os.path.join(TEMP_DIR, f"{basename}.ass")
-        if ext_srt:
+        if did_ai_clean and ai_clean_segments is not None:
+            print("[2/4] Subtitle dari hasil AI-clean (sinkron video bersih).")
+            try:
+                clean_dur = utils.ffprobe_duration(work_input)
+                ass = subtitle_burner.make_clip_ass_timed(
+                    ai_clean_segments, 0.0, clean_dur, ass_path, style=args.style
+                )
+                subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
+            except Exception as exc:
+                print(f"[WARNING] Subtitle (AI-clean) dilewati: {exc}")
+        elif ext_srt:
             print(f"[2/4] Subtitle dari folder: {os.path.basename(ext_srt)} (transkripsi dilewati).")
             try:
                 ass = subtitle_burner.srt_to_ass(ext_srt, ass_path, style=args.style)
@@ -428,6 +451,51 @@ def save_subtitle_copy(srt_src, key):
         print(f"[WARNING] Gagal menyimpan salinan subtitle: {exc}")
 
 
+def run_ai_clean(args, source, basename):
+    """Bersihkan video sumber dengan AI (buang filler/jeda/ngelantur).
+
+    Mengembalikan (work_input, remapped_segments, did_clean). Bila gagal/tak ada
+    key → kembalikan (source, None, False) agar pipeline lanjut tanpa pembersihan.
+    """
+    provider = args.ai_provider or os.environ.get("AI_PROVIDER", "gemini")
+    if not ai_client.available(provider):
+        print(f"[WARNING] --ai-clean: key AI '{provider}' tidak ada (set di .env) — pembersihan dilewati.")
+        return source, None, False
+
+    print(f"[1/4] AI clean: transkripsi + analisis ({provider})...")
+    try:
+        segs, _t, _srt = transcriber.transcribe(
+            source, model=args.model, engine=args.engine, lang=args.lang
+        )
+    except Exception as exc:
+        print(f"[WARNING] --ai-clean: transkripsi gagal ({exc}) — pembersihan dilewati.")
+        return source, None, False
+    if not segs:
+        print("[WARNING] --ai-clean: transkrip kosong — pembersihan dilewati.")
+        return source, None, False
+
+    remove_idx = ai_director.select_cuts(segs, provider=provider)
+    if not remove_idx:
+        print("[INFO] --ai-clean: tidak ada bagian yang dibuang (atau respons tak valid).")
+        return source, None, False
+
+    ranges, remapped = ai_director.plan_clean(segs, remove_idx)
+    if not ranges:
+        print("[WARNING] --ai-clean: tidak ada bagian tersisa — pembersihan dilewati.")
+        return source, None, False
+
+    cleaned = os.path.join(TEMP_DIR, f"{basename}_clean.mp4")
+    try:
+        encoder.assemble_ranges(source, ranges, cleaned, TEMP_DIR)
+    except Exception as exc:
+        print(f"[WARNING] --ai-clean: gagal merangkai ({exc}) — pakai video asli.")
+        return source, None, False
+
+    print(f"[INFO] AI clean: {len(remove_idx)} segmen dibuang, "
+          f"{len(ranges)} potongan dirangkai → video bersih.")
+    return cleaned, remapped, True
+
+
 def resolve_music(args):
     """Tentukan file musik: --music > --music-topic (download) > auto sound/ > None."""
     if getattr(args, "music", None):
@@ -487,6 +555,8 @@ def build_parser():
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
     p.add_argument("--ai-moments", action="store_true",
                    help="Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di .env)")
+    p.add_argument("--ai-clean", action="store_true",
+                   help="Buang filler/jeda/ngelantur via AI/LLM (single; perlu API key di .env)")
     p.add_argument("--ai-provider", choices=["gemini", "groq"], default=None,
                    help="Provider AI (default: env AI_PROVIDER atau gemini)")
     p.add_argument("--max-clips", type=int, default=None, help="Batasi jumlah klip (clipper)")

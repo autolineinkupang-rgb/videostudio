@@ -395,6 +395,35 @@ def _concat_via_filter(segment_paths: List[str], output: str) -> str:
     return output
 
 
+def assemble_ranges(input_video: str, ranges: List[Tuple[float, float]], output: str, temp_dir: str) -> str:
+    """Potong beberapa range [(start,end), ...] dari satu video lalu gabung jadi satu.
+
+    Dipakai mode --ai-clean: menyisakan hanya bagian bagus (membuang filler/jeda).
+    Semua potongan berasal dari sumber yang sama → resolusi seragam.
+    """
+    input_video = utils.resolve_path(input_video)
+    output = utils.resolve_path(output)
+    temp_dir = utils.ensure_dir(utils.resolve_path(temp_dir))
+    if not ranges:
+        raise RuntimeError("Tidak ada range untuk dirangkai")
+
+    parts: List[str] = []
+    for i, (start, end) in enumerate(ranges):
+        dur = float(end) - float(start)
+        if dur <= 0:
+            continue
+        part = os.path.join(temp_dir, f"clean_{i:03d}.mp4")
+        cut_simple(input_video, float(start), dur, part)
+        parts.append(part)
+
+    if not parts:
+        raise RuntimeError("Tidak ada segmen valid untuk dirangkai")
+    if len(parts) == 1:
+        os.replace(parts[0], output)
+        return output
+    return concat_segments(parts, output, temp_dir)
+
+
 def concat_segments(segment_paths: List[str], output: str, temp_dir: str) -> str:
     """Gabung beberapa segmen. Coba stream copy dulu (cepat), lalu fallback
     concat filter yang menormalkan resolusi/SAR/fps (tahan input heterogen)."""

@@ -12,6 +12,7 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - **Subtitle siap-pakai dari folder `subtitle/`** — taruh file `.srt` di sana → dipakai langsung (transkripsi Whisper dilewati), bisa Anda koreksi manual.
 - **Loop koreksi subtitle** — subtitle hasil transkripsi otomatis disalin ke `subtitle/`; koreksi file-nya lalu jalankan ulang → video dirender dengan subtitle yang sudah diperbaiki (tanpa transkripsi ulang).
 - **Color grading** (LUT `.cube`, vignette, teks overlay) & **silence cut** via `auto-editor`.
+- **AI auto-clean** (`--ai-clean`) — LLM membuang filler/jeda/ngelantur, video dirangkai ulang dari bagian bagus saja (mode single).
 - **Background music** royalty-free + audio mixing (file sendiri, auto-scan `sound/`, atau download per topik via `--music-topic`).
 - **Reframe 9:16** dengan **smart-crop** (deteksi wajah, fokus ke subjek) + fallback otomatis ke background blur / center-crop.
 - **Laporan** ringkasan hasil di `output/report.txt`.
@@ -86,6 +87,7 @@ Silence cut → ambil segmen terkeras → gabung → background music. Klip sumb
 | `--music FILE` / `--music-vol 0.2` / `--no-music` | Kontrol background music |
 | `--music-topic {tech,motivation,gaming,vlog,educational,drama,funny,chill}` | Download BGM royalty-free per topik ke `music_lib/` |
 | `--ai-moments` | Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di `.env`) |
+| `--ai-clean` | Buang filler/jeda/ngelantur via AI/LLM (single; perlu API key di `.env`) |
 | `--ai-provider {gemini,groq}` | Provider AI (default: `AI_PROVIDER` di `.env`, atau `gemini`) |
 | `--max-clips N` | Batasi jumlah klip (clipper) |
 | `--duration N` | Durasi target (compile) |
@@ -106,15 +108,23 @@ cp .env.example .env          # lalu isi GEMINI_API_KEY atau GROQ_API_KEY
 #   Gemini (gratis): https://aistudio.google.com/apikey
 #   Groq   (gratis): https://console.groq.com/keys
 
-# 2) Pakai:
+# 2a) Clipper — AI pilih cuplikan terbaik:
 .venv/bin/python videostudio.py --mode clipper "URL" \
   --ai-moments --ai-provider gemini --subtitle --max-clips 5
+
+# 2b) Single — AI buang filler/jeda/ngelantur (auto-edit cerdas):
+.venv/bin/python videostudio.py --mode single input/video1.mp4 \
+  --ai-clean --subtitle --style HYPE
 ```
 
 Key dibaca dari `.env` / environment (`GEMINI_API_KEY`, `GROQ_API_KEY`, `AI_PROVIDER`,
 opsional `GEMINI_MODEL`/`GROQ_MODEL`). File `.env` **tidak ikut di-commit**.
 
-> Fase berikutnya (belum ada): `--ai-clean` untuk membuang jeda & filler-word otomatis.
+**`--ai-clean`** (mode single): LLM menandai segmen filler/ngelantur/jeda dari transkrip,
+lalu video dirangkai ulang hanya dari bagian bagus (level kalimat) — dead-air ikut terbuang.
+Mengaktifkan `--ai-clean` otomatis menonaktifkan silence-cut `auto-editor` dan, bila
+`--subtitle` aktif, subtitle dibuat sinkron dengan video bersih (tanpa transkripsi ulang).
+Tanpa key/respons gagal → pembersihan dilewati, pipeline tetap jalan.
 
 ## 🗂️ Struktur Proyek
 

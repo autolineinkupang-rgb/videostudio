@@ -7,9 +7,10 @@ pemanggil fallback ke deteksi momen heuristik (moment_detector).
 """
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import ai_client, utils
+from .transcriber import Segment
 
 _SYSTEM = (
     "Kamu editor video Shorts/Reels berpengalaman. Kamu memilih cuplikan paling "
@@ -109,3 +110,124 @@ def select_moments(segments, duration, max_clips=None, provider="gemini") -> Lis
     if max_clips:
         moments = moments[:max_clips]
     return moments
+
+
+# ── AI clean: buang filler/jeda/ngelantur (mode single) ───────────────────────
+
+_CLEAN_SYSTEM = (
+    "Kamu editor yang merapikan rekaman bicara. Dari transkrip bertimestamp bernomor, "
+    "tentukan segmen mana yang sebaiknya DIBUANG: kata/kalimat pengisi ('emm','anu','eee'), "
+    "pengulangan, basa-basi, bagian ngelantur/melenceng. Pertahankan semua isi substantif. "
+    "Jawab HANYA JSON valid."
+)
+
+
+def _build_clean_prompt(segments) -> str:
+    lines = [f"[{i}] ({float(s.start):.1f}-{float(s.end):.1f}) {s.text}" for i, s in enumerate(segments)]
+    return (
+        "Berikut transkrip bernomor. Kembalikan HANYA JSON (tanpa teks lain) berisi indeks "
+        "segmen yang harus DIBUANG (filler/pengulangan/ngelantur). Jangan buang isi penting.\n"
+        'Format: {"remove": [<indeks angka>, ...]}\n\n'
+        f"Transkrip:\n" + "\n".join(lines)
+    )
+
+
+def _extract_remove_indices(text: str, n: int) -> Optional[Set[int]]:
+    """Ambil indeks-buang dari balasan LLM: objek {\"remove\":[...]} atau array [...]."""
+    if not text:
+        return None
+    idxs = None
+    obj_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if obj_match:
+        try:
+            obj = json.loads(obj_match.group(0))
+            if isinstance(obj, dict) and isinstance(obj.get("remove"), list):
+                idxs = obj["remove"]
+        except Exception:
+            idxs = None
+    if idxs is None:
+        arr_match = re.search(r"\[.*\]", text, re.DOTALL)
+        if arr_match:
+            try:
+                arr = json.loads(arr_match.group(0))
+                if isinstance(arr, list):
+                    idxs = arr
+            except Exception:
+                idxs = None
+    if idxs is None:
+        return None
+    result: Set[int] = set()
+    for x in idxs:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n:
+            result.add(i)
+    return result
+
+
+def select_cuts(segments, provider: str = "gemini", max_remove_ratio: float = 0.7) -> Optional[Set[int]]:
+    """LLM menandai indeks segmen yang dibuang (filler/jeda/ngelantur).
+
+    None bila tak ada key / gagal / parse gagal / pembuangan berlebihan
+    (>max_remove_ratio) — pemanggil melewati pembersihan.
+    """
+    if not segments:
+        return None
+    raw = ai_client.complete(
+        _build_clean_prompt(segments), provider=provider, system=_CLEAN_SYSTEM, temperature=0.2
+    )
+    if not raw:
+        return None
+    remove = _extract_remove_indices(raw, len(segments))
+    if not remove:
+        return None
+    if len(remove) > max_remove_ratio * len(segments):
+        print(f"[WARNING] AI clean ingin membuang {len(remove)}/{len(segments)} segmen "
+              "(terlalu banyak) — pembersihan dibatalkan.")
+        return None
+    return remove
+
+
+def plan_clean(segments, remove_idx: Optional[Set[int]], max_gap: float = 0.6
+               ) -> Tuple[List[Tuple[float, float]], List[Segment]]:
+    """Bangun keep-ranges (waktu sumber) + segmen ter-remap ke timeline bersih.
+
+    Segmen tersisa yang berurutan digabung jadi satu range; dipecah bila ada
+    segmen dibuang ATAU jeda antar-segmen > max_gap (dead-air ikut terbuang).
+    Fungsi murni (tanpa API) agar mudah diuji.
+    """
+    remove_idx = remove_idx or set()
+    kept = [(i, s) for i, s in enumerate(segments) if i not in remove_idx]
+    if not kept:
+        return [], []
+
+    ranges: List[Tuple[float, float]] = []
+    members: List[List[Segment]] = []
+    cur_start = cur_end = None
+    cur_members: List[Segment] = []
+    prev_i = None
+    for i, s in kept:
+        st, en = float(s.start), float(s.end)
+        if cur_start is None:
+            cur_start, cur_end, cur_members = st, en, [s]
+        elif prev_i is not None and i == prev_i + 1 and (st - cur_end) <= max_gap:
+            cur_end = en
+            cur_members.append(s)
+        else:
+            ranges.append((cur_start, cur_end))
+            members.append(cur_members)
+            cur_start, cur_end, cur_members = st, en, [s]
+        prev_i = i
+    ranges.append((cur_start, cur_end))
+    members.append(cur_members)
+
+    remapped: List[Segment] = []
+    offset = 0.0
+    for (rs, re_), group in zip(ranges, members):
+        for s in group:
+            remapped.append(Segment(start=offset + (float(s.start) - rs),
+                                     end=offset + (float(s.end) - rs), text=s.text))
+        offset += (re_ - rs)
+    return ranges, remapped
