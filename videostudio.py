@@ -205,6 +205,8 @@ def run_single(args):
                 subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
         except Exception as exc:
             print(f"[WARNING] Subtitle dilewati: {exc}")
+    else:
+        print("[2/4] Subtitle dilewati (tambah --subtitle untuk mengaktifkan).")
 
     lut = utils.resolve_path(args.lut) if args.lut else color_grader.find_lut(EFEK_DIR)
     if lut:
