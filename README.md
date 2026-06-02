@@ -10,7 +10,7 @@ Pipeline pengolahan video berbasis Python untuk membuat **YouTube Shorts / Reels
 - **Deteksi momen menarik** untuk memotong klip secara otomatis.
 - **Subtitle burning** dengan 4 style siap pakai: `HYPE`, `KARAOKE`, `PODCAST`, `CLEAN`.
 - **Color grading** (LUT `.cube`, vignette, teks overlay) & **silence cut** via `auto-editor`.
-- **Background music** royalty-free + audio mixing.
+- **Background music** royalty-free + audio mixing (file sendiri, auto-scan `sound/`, atau download per topik via `--music-topic`).
 - **Reframe 9:16** dengan opsi background blur untuk sumber landscape.
 - **Laporan** ringkasan hasil di `output/report.txt`.
 
@@ -62,7 +62,7 @@ Silence cut → reframe 9:16 → color grade → background music.
 
 ### Mode `compile` — banyak klip → 1 video gabungan
 
-Silence cut → ambil segmen terkeras → gabung → background music.
+Silence cut → ambil segmen terkeras → gabung → background music. Klip sumber boleh beda resolusi/aspek — segmen otomatis dinormalkan saat penggabungan.
 
 ```bash
 .venv/bin/python videostudio.py --mode compile --duration 60
@@ -81,6 +81,7 @@ Silence cut → ambil segmen terkeras → gabung → background music.
 | `--blur-background`, `-b` | Background blur untuk sumber landscape |
 | `--lut FILE.cube` | Terapkan LUT (mode single) |
 | `--music FILE` / `--music-vol 0.2` / `--no-music` | Kontrol background music |
+| `--music-topic {tech,motivation,gaming,vlog,educational,drama,funny,chill}` | Download BGM royalty-free per topik ke `music_lib/` |
 | `--max-clips N` | Batasi jumlah klip (clipper) |
 | `--duration N` | Durasi target (compile) |
 | `--cookies FILE` / `--browser-cookies` | Cookies untuk video yang butuh login |

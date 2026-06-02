@@ -105,10 +105,11 @@ def encode_segment(
     target_kbps: Optional[int] = None,
 ) -> None:
     """Encode satu segmen. Jika target_kbps diberi → mode bitrate (cap ukuran)."""
+    has_audio = utils.has_audio_stream(input_video)
     cmd = ["ffmpeg", "-hide_banner", "-y", "-loglevel", "error"]
     cmd += build_precise_trim_args(input_video, start, dur)
     cmd += ["-vf", video_filter]
-    if audio_filter:
+    if audio_filter and has_audio:
         cmd += ["-af", audio_filter]
     cmd += ["-c:v", "libx264"]
     if target_kbps is not None:
@@ -123,7 +124,8 @@ def encode_segment(
         "-preset", PRESET, "-profile:v", PROFILE, "-level:v", LEVEL,
         "-r", str(FPS), "-pix_fmt", "yuv420p",
     ]
-    cmd += _audio_args()
+    # Sumber tanpa audio → jangan paksa encode/-af audio (FFmpeg akan error).
+    cmd += _audio_args() if has_audio else ["-an"]
     cmd += ["-threads", str(THREADS), "-movflags", "+faststart", output]
     ok, msg = utils.run_cmd(cmd)
     if not ok:
@@ -233,14 +235,18 @@ def reframe_single(
         subtitle_fragment=subtitle_fragment,
     )
     af = build_audio_fade(dur)
+    has_audio = utils.has_audio_stream(input_video)
 
     cmd = ["ffmpeg", "-hide_banner", "-y", "-loglevel", "error", "-i", input_video]
     if max_duration is not None:
         cmd += ["-t", f"{max_duration:.3f}"]
-    cmd += ["-vf", vf, "-af", af, "-c:v", "libx264", "-crf", str(CRF),
+    cmd += ["-vf", vf, "-c:v", "libx264", "-crf", str(CRF),
             "-preset", PRESET, "-profile:v", PROFILE, "-level:v", LEVEL,
             "-r", str(FPS), "-pix_fmt", "yuv420p"]
-    cmd += _audio_args()
+    if has_audio:
+        cmd += ["-af", af, *_audio_args()]
+    else:
+        cmd += ["-an"]
     cmd += ["-threads", str(THREADS), "-movflags", "+faststart", output]
     ok, msg = utils.run_cmd(cmd)
     if not ok:
@@ -278,13 +284,14 @@ def find_loudest_start(path: str, take_dur: float) -> float:
 
 def cut_simple(input_video: str, start: float, dur: float, output: str) -> str:
     """Potong sederhana + re-encode libx264 (untuk segmen compile)."""
+    has_audio = utils.has_audio_stream(input_video)
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-ss", str(start), "-t", str(dur), "-i", input_video,
         "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF),
         "-r", str(FPS), "-pix_fmt", "yuv420p",
     ]
-    cmd += _audio_args()
+    cmd += _audio_args() if has_audio else ["-an"]
     cmd += ["-avoid_negative_ts", "make_zero", "-threads", str(THREADS), output]
     ok, msg = utils.run_cmd(cmd)
     if not ok:
@@ -292,8 +299,64 @@ def cut_simple(input_video: str, start: float, dur: float, output: str) -> str:
     return output
 
 
+def _concat_target_resolution(segment_paths: List[str]) -> Tuple[int, int]:
+    """Resolusi target = segmen pertama yang bisa di-probe; fallback ke config."""
+    for p in segment_paths:
+        w, h = utils.ffprobe_resolution(p)
+        if w and h:
+            return w, h
+    return WIDTH, HEIGHT
+
+
+def _concat_via_filter(segment_paths: List[str], output: str) -> str:
+    """Gabung dengan concat filter: normalkan resolusi/SAR/fps tiap segmen.
+
+    Tahan input beda resolusi/aspek (yang membuat concat demuxer rusak/gagal).
+    Audio ikut digabung hanya bila SEMUA segmen punya stream audio; jika tidak,
+    output dibuat tanpa audio agar concat tetap berhasil.
+    """
+    tw, th = _concat_target_resolution(segment_paths)
+    all_audio = all(utils.has_audio_stream(p) for p in segment_paths)
+    n = len(segment_paths)
+
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    for p in segment_paths:
+        cmd += ["-i", p]
+
+    parts: List[str] = []
+    for i in range(n):
+        parts.append(
+            f"[{i}:v]scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+            f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},format=yuv420p[v{i}]"
+        )
+        if all_audio:
+            parts.append(
+                f"[{i}:a]aresample={A_RATE},"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
+            )
+    if all_audio:
+        concat_in = "".join(f"[v{i}][a{i}]" for i in range(n))
+        parts.append(f"{concat_in}concat=n={n}:v=1:a=1[outv][outa]")
+        maps = ["-map", "[outv]", "-map", "[outa]"]
+    else:
+        concat_in = "".join(f"[v{i}]" for i in range(n))
+        parts.append(f"{concat_in}concat=n={n}:v=1:a=0[outv]")
+        maps = ["-map", "[outv]"]
+
+    cmd += ["-filter_complex", ";".join(parts), *maps,
+            "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p"]
+    if all_audio:
+        cmd += _audio_args()
+    cmd += ["-threads", str(THREADS), "-movflags", "+faststart", output]
+    ok, msg = utils.run_cmd(cmd)
+    if not ok:
+        raise RuntimeError(msg)
+    return output
+
+
 def concat_segments(segment_paths: List[str], output: str, temp_dir: str) -> str:
-    """Gabung beberapa segmen via concat demuxer (stream copy)."""
+    """Gabung beberapa segmen. Coba stream copy dulu (cepat), lalu fallback
+    concat filter yang menormalkan resolusi/SAR/fps (tahan input heterogen)."""
     filelist = os.path.join(utils.resolve_path(temp_dir), "filelist.txt")
     with open(filelist, "w", encoding="utf-8") as fh:
         for p in segment_paths:
@@ -302,17 +365,11 @@ def concat_segments(segment_paths: List[str], output: str, temp_dir: str) -> str
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", filelist, "-c", "copy", output,
     ])
-    if not ok:
-        # Fallback: re-encode jika stream copy gagal (codec/timestamp tidak seragam).
-        ok2, msg2 = utils.run_cmd([
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "concat", "-safe", "0", "-i", filelist,
-            "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF),
-            *(_audio_args()), "-threads", str(THREADS), output,
-        ])
-        if not ok2:
-            raise RuntimeError(msg2 or msg)
-    return output
+    if ok:
+        return output
+    # Stream copy gagal (resolusi/codec/timestamp tidak seragam) → normalisasi.
+    print("[WARNING] Concat stream-copy gagal — normalisasi resolusi & re-encode...")
+    return _concat_via_filter(segment_paths, output)
 
 
 # ── Util internal ────────────────────────────────────────────────────────────

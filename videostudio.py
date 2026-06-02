@@ -29,6 +29,7 @@ CFG = utils.load_config()
 ROOT = utils.ROOT_DIR
 INPUT_DIR = os.path.join(ROOT, "input")
 SOUND_DIR = os.path.join(ROOT, "sound")
+MUSIC_LIB_DIR = os.path.join(ROOT, "music_lib")
 EFEK_DIR = os.path.join(ROOT, "efek")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 CLIPS_DIR = os.path.join(OUTPUT_DIR, "clips")
@@ -37,7 +38,7 @@ LOG_PATH = os.path.join(OUTPUT_DIR, "pipeline.log")
 
 
 def ensure_directories():
-    for path in (INPUT_DIR, SOUND_DIR, EFEK_DIR, OUTPUT_DIR, CLIPS_DIR, TEMP_DIR):
+    for path in (INPUT_DIR, SOUND_DIR, MUSIC_LIB_DIR, EFEK_DIR, OUTPUT_DIR, CLIPS_DIR, TEMP_DIR):
         utils.ensure_dir(path)
 
 
@@ -317,13 +318,19 @@ def run_compile(args):
 # ── Helper umum ───────────────────────────────────────────────────────────────
 
 def resolve_music(args):
-    """Tentukan file musik: --music > auto sound/ > None. (Tanpa download.)"""
+    """Tentukan file musik: --music > --music-topic (download) > auto sound/ > None."""
     if getattr(args, "music", None):
         path = utils.resolve_path(args.music)
         if os.path.exists(path):
             return path
         print(f"[WARNING] Musik tidak ditemukan: {path}")
         return None
+    topic = getattr(args, "music_topic", None)
+    if topic:
+        found = music_finder.find_music_for_topic(topic, MUSIC_LIB_DIR)
+        if found:
+            return found
+        print("[WARNING] Gagal menyiapkan musik dari topik — fallback ke folder sound/.")
     return audio_mixer.find_music(SOUND_DIR)
 
 
@@ -354,6 +361,8 @@ def build_parser():
     p.add_argument("--style", choices=["HYPE", "KARAOKE", "PODCAST", "CLEAN"], default="CLEAN", help="Style subtitle")
     p.add_argument("--lut", help="File LUT .cube (mode single)")
     p.add_argument("--music", help="File background music")
+    p.add_argument("--music-topic", choices=music_finder.TOPICS,
+                   help="Download BGM royalty-free per topik ke music_lib/ (alternatif --music)")
     p.add_argument("--music-vol", type=float, default=CFG["music"]["volume"], help="Volume musik 0.0-1.0")
     p.add_argument("--no-music", action="store_true", help="Tanpa background music (single)")
     p.add_argument("--no-auto", action="store_true", help="Lewati auto-editor (single)")

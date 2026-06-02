@@ -49,11 +49,15 @@ def mix_music(
         raise RuntimeError(f"Musik tidak ditemukan: {music_path}")
 
     volume = max(0.0, min(1.0, float(volume)))
-    # [0:a] audio asli ; [1:a] musik loop + volume rendah ; amix duration=first.
-    filter_complex = (
-        f"[1:a]aloop=loop=-1:size=2147483647,volume={volume}[bgm];"
-        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
-    )
+    if utils.has_audio_stream(video_path):
+        # [0:a] audio asli ; [1:a] musik loop + volume rendah ; amix duration=first.
+        filter_complex = (
+            f"[1:a]aloop=loop=-1:size=2147483647,volume={volume}[bgm];"
+            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+        )
+    else:
+        # Video tanpa audio → musik jadi satu-satunya track (volume penuh).
+        filter_complex = "[1:a]aloop=loop=-1:size=2147483647[aout]"
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", video_path, "-i", music_path,

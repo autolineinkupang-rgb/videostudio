@@ -216,6 +216,16 @@ def ffprobe_resolution(path: str) -> Tuple[int, int]:
         return 0, 0
 
 
+def has_audio_stream(path: str) -> bool:
+    """True jika file punya minimal satu stream audio. False bila gagal/tidak ada."""
+    ok, out = run_cmd([
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0", path,
+    ])
+    return ok and bool(out.strip())
+
+
 def available_ram_gb() -> Optional[float]:
     """RAM tersedia dalam GB, atau None jika psutil tidak ada."""
     try:
