@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""VideoStudio Terpadu — runner utama (3 mode dalam 1 file).
+
+Mode:
+  clipper  : URL YouTube → download → transkripsi → deteksi momen → Shorts
+  single   : 1 video lokal → silence cut → reframe 9:16 → grade → BGM
+  compile  : banyak klip → silence cut → segmen terkeras → gabung → BGM
+
+Dioptimasi untuk hardware mid-range tanpa GPU (libx264, serial, RAM-safe).
+"""
+import argparse
+import glob
+import os
+import shutil
+import sys
+from datetime import datetime
+
+# Pastikan paket modules/ bisa diimpor saat dijalankan dari mana pun.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from modules import (  # noqa: E402
+    utils, downloader, transcriber, moment_detector, encoder,
+    subtitle_burner, color_grader, audio_mixer, music_finder, reporter,
+)
+
+CFG = utils.load_config()
+ROOT = utils.ROOT_DIR
+INPUT_DIR = os.path.join(ROOT, "input")
+SOUND_DIR = os.path.join(ROOT, "sound")
+EFEK_DIR = os.path.join(ROOT, "efek")
+OUTPUT_DIR = os.path.join(ROOT, "output")
+CLIPS_DIR = os.path.join(OUTPUT_DIR, "clips")
+TEMP_DIR = os.path.join(ROOT, "temp")
+LOG_PATH = os.path.join(OUTPUT_DIR, "pipeline.log")
+
+
+def ensure_directories():
+    for path in (INPUT_DIR, SOUND_DIR, EFEK_DIR, OUTPUT_DIR, CLIPS_DIR, TEMP_DIR):
+        utils.ensure_dir(path)
+
+
+def find_auto_editor():
+    """Cari binary auto-editor di PATH atau lokasi umum pip --user."""
+    found = shutil.which("auto-editor")
+    if found:
+        return found
+    candidate = os.path.expanduser("~/.local/bin/auto-editor")
+    return candidate if os.path.exists(candidate) else None
+
+
+def cleanup_temp(keep_temp: bool):
+    try:
+        if not keep_temp and os.path.isdir(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR)
+            utils.ensure_dir(TEMP_DIR)
+            print("Temporary files dihapus dari folder temp/.")
+        elif keep_temp:
+            print("Temporary files dipertahankan (--keep-temp).")
+    except Exception as exc:
+        print("[WARNING] Gagal membersihkan temp.")
+        utils.write_log(LOG_PATH, f"[WARNING] cleanup temp: {exc}")
+
+
+# ── MODE CLIPPER ──────────────────────────────────────────────────────────────
+
+def run_clipper(args):
+    print("[1/6] Download video...")
+    try:
+        mp4_path, _meta_path, metadata = downloader.download_video(
+            args.source, INPUT_DIR, cookies=args.cookies, browser_cookies=args.browser_cookies
+        )
+    except Exception as exc:
+        print(f"[ERROR] {exc}")
+        sys.exit(1)
+
+    duration = float(metadata.get("duration") or 0.0)
+    title = metadata.get("title", "clip")
+    if duration:
+        print(f"[INFO] Durasi video: {duration / 60:.1f} menit.")
+
+    print("[2/6] Transkripsi audio...")
+    srt_path = os.path.join(TEMP_DIR, "subtitle.srt")
+    segments = []
+    try:
+        segments, _text, _srt = transcriber.transcribe(
+            mp4_path, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
+        )
+    except Exception as exc:
+        print(f"[WARNING] Transkripsi gagal: {exc}")
+
+    print("[3/6] Deteksi momen menarik...")
+    timestamps_path = os.path.join(TEMP_DIR, "timestamps.json")
+    timestamps = moment_detector.detect_moments(
+        mp4_path, segments, duration=duration, timestamps_out=timestamps_path
+    )
+    if not timestamps:
+        print("[ERROR] Tidak ada momen terdeteksi. Pipeline dihentikan.")
+        sys.exit(1)
+    print(f"[INFO] {len(timestamps)} momen siap dipotong.")
+
+    # Fragmen filter opsional untuk dilebur dalam satu pass encode.
+    color_fragment = color_grader.build_effects_filter() if args.effects else ""
+
+    subtitle_provider = None
+    if args.subtitle:
+        def subtitle_provider(item, idx, start, end):
+            transcript = item.get("transcript", "")
+            if not transcript:
+                return ""
+            ass_path = os.path.join(TEMP_DIR, f"clip_{idx:02d}.ass")
+            ass = subtitle_burner.make_clip_ass(transcript, end - start, ass_path, style=args.style)
+            return subtitle_burner.build_filter(ass) if ass else ""
+
+    print("[4/6] Potong & encode klip (serial, 1 per 1)...")
+    infos = encoder.cut_clips(
+        mp4_path, timestamps, CLIPS_DIR, title,
+        max_clips=args.max_clips, blur_background=args.blur_background,
+        color_fragment=color_fragment, audio_punchy=args.effects,
+        subtitle_provider=subtitle_provider,
+    )
+
+    print("[5/6] Background music (opsional)...")
+    music = resolve_music(args)
+    if music and infos:
+        for info in infos:
+            try:
+                tmp_out = info["path"] + ".bgm.mp4"
+                audio_mixer.mix_music(info["path"], music, tmp_out, volume=args.music_vol)
+                os.replace(tmp_out, info["path"])
+                info["size_bytes"] = os.path.getsize(info["path"])
+            except Exception as exc:
+                print(f"[WARNING] Gagal mix BGM untuk {info['filename']}: {exc}")
+    elif not music:
+        print("[INFO] Tidak ada musik — klip tanpa background music.")
+
+    print("[6/6] Laporan akhir...")
+    reporter.generate_report(
+        infos, os.path.join(OUTPUT_DIR, "report.txt"),
+        source=args.source, mode="clipper", timestamps=timestamps,
+    )
+    print_summary(infos, CLIPS_DIR)
+
+
+# ── MODE SINGLE ───────────────────────────────────────────────────────────────
+
+def run_single(args):
+    source = args.source
+    if not source:
+        source = utils.find_video_in_dir(INPUT_DIR)
+        if not source:
+            print(f"[ERROR] Tidak ada video di {INPUT_DIR}. Taruh file atau beri path.")
+            sys.exit(1)
+        print(f"[INFO] Auto video: {os.path.basename(source)}")
+    source = utils.resolve_path(source)
+    if not os.path.exists(source):
+        print(f"[ERROR] File tidak ditemukan: {source}")
+        sys.exit(1)
+
+    basename = utils.sanitize_filename(os.path.splitext(os.path.basename(source))[0])
+    work_input = source
+
+    # [1] Silence cut dengan auto-editor (opsional).
+    if not args.no_auto:
+        ae = find_auto_editor()
+        if ae:
+            cut_out = os.path.join(TEMP_DIR, f"{basename}_cut.mp4")
+            print("[1/4] Silence cut (auto-editor)...")
+            ok = utils.run_step([
+                ae, source, "--edit", "audio:threshold=0.04", "--margin", "0.2sec",
+                "--video-codec", "libx264", "-o", cut_out,
+            ], "auto-editor", LOG_PATH, allow_fail=True)
+            if ok and os.path.exists(cut_out):
+                work_input = cut_out
+            else:
+                print("[WARNING] auto-editor gagal — lanjut tanpa silence cut.")
+        else:
+            print("[WARNING] auto-editor tidak ditemukan — lewati (pakai --no-auto untuk diam).")
+    else:
+        print("[1/4] Silence cut dilewati (--no-auto).")
+
+    # [2-3] Reframe 9:16 + color grade + overlay + subtitle (satu pass).
+    subtitle_fragment = ""
+    if args.subtitle:
+        print("[2/4] Transkripsi untuk subtitle...")
+        srt_path = os.path.join(TEMP_DIR, f"{basename}.srt")
+        try:
+            segs, _t, srt = transcriber.transcribe(
+                work_input, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
+            )
+            if srt:
+                ass = subtitle_burner.srt_to_ass(srt, os.path.join(TEMP_DIR, f"{basename}.ass"), style=args.style)
+                subtitle_fragment = subtitle_burner.build_filter(ass) if ass else ""
+        except Exception as exc:
+            print(f"[WARNING] Subtitle dilewati: {exc}")
+
+    lut = utils.resolve_path(args.lut) if args.lut else color_grader.find_lut(EFEK_DIR)
+    if lut:
+        print(f"[INFO] LUT: {os.path.basename(lut)}")
+    color_fragment = color_grader.build_color_filter(lut=lut, effects=False)
+    overlay_fragment = color_grader.build_overlay_filter(text=args.text, channel=args.channel)
+
+    print("[3/4] Reframe 9:16 + color grade + overlay...")
+    reframed = os.path.join(TEMP_DIR, f"{basename}_reframe.mp4")
+    try:
+        encoder.reframe_single(
+            work_input, reframed, max_duration=60.0,
+            blur_background=args.blur_background, color_fragment=color_fragment,
+            overlay_fragment=overlay_fragment, subtitle_fragment=subtitle_fragment,
+        )
+    except Exception as exc:
+        print(f"[ERROR] Reframe gagal: {exc}")
+        sys.exit(1)
+
+    # [4] BGM + output final.
+    final_out = os.path.join(OUTPUT_DIR, f"{basename}_SHORT.mp4")
+    music = None if args.no_music else resolve_music(args)
+    if music:
+        print("[4/4] Mix background music...")
+        try:
+            audio_mixer.mix_music(reframed, music, final_out, volume=args.music_vol)
+        except Exception as exc:
+            print(f"[WARNING] Mix BGM gagal ({exc}) — output tanpa musik.")
+            shutil.copy(reframed, final_out)
+    else:
+        print("[4/4] Tanpa background music.")
+        shutil.copy(reframed, final_out)
+
+    size = os.path.getsize(final_out) if os.path.exists(final_out) else 0
+    info = [{
+        "filename": os.path.basename(final_out), "path": final_out,
+        "duration": utils.ffprobe_duration(final_out), "size_bytes": size,
+        "start": "", "end": "", "score": "", "reason": "", "transcript": "",
+    }]
+    reporter.generate_report(info, os.path.join(OUTPUT_DIR, "report.txt"), source=source, mode="single")
+    print_summary(info, OUTPUT_DIR)
+
+
+# ── MODE COMPILE ──────────────────────────────────────────────────────────────
+
+def run_compile(args):
+    clips = sorted(glob.glob(os.path.join(INPUT_DIR, "*.mp4")))
+    if not clips:
+        print(f"[ERROR] Tidak ada file .mp4 di {INPUT_DIR}")
+        sys.exit(1)
+    print(f"[INFO] Ditemukan {len(clips)} klip.")
+    target = float(args.duration)
+
+    # [1] Silence cut tiap klip.
+    ae = find_auto_editor()
+    ae_out = []
+    for i, clip in enumerate(clips):
+        out = os.path.join(TEMP_DIR, f"ae_{i:02d}.mp4")
+        if ae:
+            print(f"[1] auto-editor [{i+1}/{len(clips)}]: {os.path.basename(clip)}")
+            ok = utils.run_step([
+                ae, clip, "--edit", "audio:threshold=0.04", "--margin", "0.2sec",
+                "--video-codec", "libx264", "-o", out,
+            ], "auto-editor", LOG_PATH, allow_fail=True)
+            ae_out.append(out if (ok and os.path.exists(out)) else clip)
+        else:
+            ae_out.append(clip)
+    if not ae:
+        print("[WARNING] auto-editor tidak ditemukan — pakai klip apa adanya.")
+
+    # [2] Hitung jatah & potong segmen terkeras tiap klip.
+    alloc = target / len(ae_out)
+    print(f"[2] Jatah per klip: {alloc:.1f}s")
+    processed = []
+    for i, clip in enumerate(ae_out):
+        out = os.path.join(TEMP_DIR, f"proc_{i:02d}.mp4")
+        print(f"[2] Potong bagian terbaik [{i+1}/{len(ae_out)}]")
+        start = encoder.find_loudest_start(clip, alloc)
+        try:
+            encoder.cut_simple(clip, start, alloc, out)
+            processed.append(out)
+        except Exception as exc:
+            print(f"[WARNING] Gagal memotong klip {i}: {exc}")
+    if not processed:
+        print("[ERROR] Tidak ada segmen berhasil dipotong.")
+        sys.exit(1)
+
+    # [3] Gabung.
+    print("[3] Menggabungkan semua segmen...")
+    merged = os.path.join(TEMP_DIR, "merged.mp4")
+    try:
+        encoder.concat_segments(processed, merged, TEMP_DIR)
+    except Exception as exc:
+        print(f"[ERROR] Gagal menggabungkan: {exc}")
+        sys.exit(1)
+
+    # [4] BGM + output.
+    final_out = os.path.join(OUTPUT_DIR, "output_final.mp4")
+    music = resolve_music(args)
+    if music:
+        print("[4] Mix background music...")
+        try:
+            audio_mixer.mix_music(merged, music, final_out, volume=args.music_vol)
+        except Exception as exc:
+            print(f"[WARNING] Mix BGM gagal ({exc}) — output tanpa musik.")
+            shutil.copy(merged, final_out)
+    else:
+        print("[4] Tanpa background music.")
+        shutil.copy(merged, final_out)
+
+    final_dur = utils.ffprobe_duration(final_out)
+    info = [{
+        "filename": os.path.basename(final_out), "path": final_out,
+        "duration": final_dur, "size_bytes": os.path.getsize(final_out) if os.path.exists(final_out) else 0,
+        "start": "", "end": "", "score": "", "reason": "", "transcript": "",
+    }]
+    reporter.generate_report(info, os.path.join(OUTPUT_DIR, "report.txt"), source=INPUT_DIR, mode="compile")
+    print(f"\n✅ Selesai! Output: {final_out} ({final_dur:.1f}s)")
+
+
+# ── Helper umum ───────────────────────────────────────────────────────────────
+
+def resolve_music(args):
+    """Tentukan file musik: --music > auto sound/ > None. (Tanpa download.)"""
+    if getattr(args, "music", None):
+        path = utils.resolve_path(args.music)
+        if os.path.exists(path):
+            return path
+        print(f"[WARNING] Musik tidak ditemukan: {path}")
+        return None
+    return audio_mixer.find_music(SOUND_DIR)
+
+
+def print_summary(infos, location):
+    total_size = sum(c.get("size_bytes", 0) for c in infos)
+    total_dur = sum(float(c.get("duration") or 0) for c in infos)
+    print(f"\nKlip selesai : {len(infos)} file")
+    print(f"Durasi total : {total_dur:.1f} detik")
+    print(f"Ukuran total : {total_size / (1024 * 1024):.2f} MB")
+    print(f"Lokasi output: {location}")
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="VideoStudio Terpadu — pipeline video pendek otomatis (3 mode).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("source", nargs="?", default=None, help="URL YouTube (clipper) atau path file (single)")
+    p.add_argument("--mode", choices=["clipper", "single", "compile"], default="clipper", help="Pilih mode pipeline")
+    p.add_argument("--model", choices=["tiny", "base", "small"], default=CFG["transcription"]["model"], help="Model Whisper")
+    p.add_argument("--engine", choices=["whisper", "faster"], default=CFG["transcription"]["engine"], help="Engine transkripsi")
+    p.add_argument("--lang", default=CFG["transcription"]["lang"], help="Bahasa transkripsi (id/en/auto)")
+    p.add_argument("--cookies", help="File cookies untuk video yang butuh login")
+    p.add_argument("--browser-cookies",
+                   choices=["chrome", "firefox", "edge", "chromium", "brave", "vivaldi", "opera"],
+                   help="Ambil cookies dari browser")
+    p.add_argument("--subtitle", action="store_true", help="Bakar subtitle ke klip")
+    p.add_argument("--style", choices=["HYPE", "KARAOKE", "PODCAST", "CLEAN"], default="CLEAN", help="Style subtitle")
+    p.add_argument("--lut", help="File LUT .cube (mode single)")
+    p.add_argument("--music", help="File background music")
+    p.add_argument("--music-vol", type=float, default=CFG["music"]["volume"], help="Volume musik 0.0-1.0")
+    p.add_argument("--no-music", action="store_true", help="Tanpa background music (single)")
+    p.add_argument("--no-auto", action="store_true", help="Lewati auto-editor (single)")
+    p.add_argument("--text", help="Teks overlay tengah bawah (single)")
+    p.add_argument("--channel", default="@YourChannel", help="Nama channel kiri atas (single)")
+    p.add_argument("--blur-background", "-b", action="store_true", help="Background blur untuk video landscape")
+    p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
+    p.add_argument("--max-clips", type=int, default=None, help="Batasi jumlah klip (clipper)")
+    p.add_argument("--duration", type=int, default=CFG["compile"]["target_duration"], help="Durasi target (compile)")
+    p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
+
+    missing = utils.check_dependencies(("ffmpeg", "ffprobe"))
+    if missing:
+        print(f"[ERROR] Dependency hilang: {', '.join(missing)}. Jalankan install.sh.")
+        sys.exit(1)
+
+    # RAM guard sebelum memuat model Whisper.
+    args.model = utils.guard_model_for_ram(args.model, CFG["transcription"]["ram_guard_gb"])
+
+    if args.mode == "clipper" and not args.source:
+        print("[ERROR] Mode clipper memerlukan URL. Contoh: --mode clipper 'https://...'")
+        sys.exit(1)
+
+    ensure_directories()
+    utils.write_log(LOG_PATH, "\n" + "=" * 64)
+    utils.write_log(LOG_PATH, f"Pipeline ({args.mode}) dimulai: {datetime.now().isoformat(timespec='seconds')}")
+
+    try:
+        if args.mode == "clipper":
+            run_clipper(args)
+        elif args.mode == "single":
+            run_single(args)
+        else:
+            run_compile(args)
+    finally:
+        cleanup_temp(args.keep_temp)
+
+    utils.write_log(LOG_PATH, f"Pipeline selesai: {datetime.now().isoformat(timespec='seconds')}")
+    print("Pipeline selesai.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,48 @@
+# =============================================================================
+# Konfigurasi global VideoStudio Terpadu
+# Semua nilai di sini bisa dioverride oleh flag CLI di videostudio.py.
+# Dioptimasi untuk Intel i5-8350U / 8GB RAM / tanpa GPU encoder.
+# =============================================================================
+
+video:
+  width: 1080            # lebar output (9:16 portrait)
+  height: 1920           # tinggi output
+  fps: 30                # frame rate output
+  crf: 18                # kualitas libx264 (lebih kecil = lebih bagus, lebih besar file)
+  preset: medium         # preset libx264 (ultrafast..veryslow)
+  max_clip_mb: 50        # ukuran maksimum per klip (MB); jika lewat → re-encode bitrate
+  profile: high          # H.264 profile
+  level: "4.1"           # H.264 level
+
+audio:
+  codec: aac
+  bitrate: 192k          # bitrate audio output
+  sample_rate: 48000     # 48kHz
+  channels: 2            # stereo
+
+encode:
+  threads: 4             # maksimum thread FFmpeg (sesuai i5-8350U)
+  seek_preroll: 2.0      # detik preroll untuk seek presisi saat cutting
+
+transcription:
+  model: base            # tiny | base | small
+  engine: whisper        # whisper | faster
+  lang: id               # id | en | auto
+  ram_guard_gb: 3.0      # jika RAM tersedia di bawah ini → paksa model tiny
+
+music:
+  volume: 0.20           # volume default background music (0.0-1.0)
+
+clip:
+  # Batas durasi klip mode clipper. Dikalibrasi dari contoh Shorts nyata
+  # (CONTOHSHORT: durasi 16s, 25s, 97s). Klip boleh pendek sampai panjang.
+  min_sec: 15            # buang klip lebih pendek dari ini
+  target_sec: 25         # ekspansi klip hingga minimal ini bila memungkinkan
+  max_sec: 100           # cap durasi klip
+
+compile:
+  target_duration: 60    # durasi target mode compile (detik)
+
+paths:
+  font_bold: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+  font_regular: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf

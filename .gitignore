@@ -1,0 +1,29 @@
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Python cache & build
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Folder kerja (isi diabaikan, hanya .gitkeep yang dilacak)
+input/*
+sound/*
+music_lib/*
+efek/*
+output/*
+temp/*
+!**/.gitkeep
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code lokal
+.claude/
