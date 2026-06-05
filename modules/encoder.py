@@ -80,14 +80,16 @@ def compose_video_filter(
     color_fragment: str = "",
     overlay_fragment: str = "",
     subtitle_fragment: str = "",
+    kenburns_fragment: str = "",
 ) -> str:
     """Susun rantai filter video lengkap dalam satu pass.
 
-    Urutan: reframe → fade → format → color → overlay → subtitle.
-    Fragmen kosong diabaikan; setiap fragmen non-kosong harus diawali koma
-    (mis. ",eq=...") atau di-handle di sini.
+    Urutan: reframe → kenburns → fade → format → color → overlay → subtitle.
+    Fragmen kosong diabaikan; setiap fragmen non-kosong harus diawali koma.
     """
     chain = build_reframe_filter(blur_background, crop_x=crop_x)
+    if kenburns_fragment:
+        chain += kenburns_fragment if kenburns_fragment.startswith(",") else f",{kenburns_fragment}"
     chain += f",{build_fade_filter(duration)},format=yuv420p"
     for frag in (color_fragment, overlay_fragment, subtitle_fragment):
         if frag:
@@ -252,6 +254,7 @@ def reframe_single(
     overlay_fragment: str = "",
     subtitle_fragment: str = "",
     smart_crop: bool = False,
+    kenburns_fragment: str = "",
 ) -> str:
     """Reframe 1 video lokal ke 9:16 + grade + overlay (mode single, satu pass)."""
     input_video = utils.resolve_path(input_video)
@@ -261,7 +264,7 @@ def reframe_single(
     if max_duration is not None and dur > max_duration:
         dur = max_duration
 
-    # Hybrid smart-crop (lihat cut_clips): wajah → crop ber-offset; else blur/center.
+    # Hybrid smart-crop: wajah → crop ber-offset; else blur/center.
     crop_x = None
     effective_blur = blur_background
     if smart_crop and not blur_background:
@@ -274,6 +277,7 @@ def reframe_single(
         dur, blur_background=effective_blur, crop_x=crop_x,
         color_fragment=color_fragment, overlay_fragment=overlay_fragment,
         subtitle_fragment=subtitle_fragment,
+        kenburns_fragment=kenburns_fragment,
     )
     af = build_audio_fade(dur)
     has_audio = utils.has_audio_stream(input_video)
