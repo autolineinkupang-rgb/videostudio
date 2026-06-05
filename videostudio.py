@@ -316,7 +316,7 @@ def run_single(args):
     kenburns_fragment = ""
     if getattr(args, "kenburns", False):
         _dur = utils.ffprobe_duration(work_input)
-        kenburns_fragment = color_grader.build_kenburns_filter(_dur)
+        kenburns_fragment = color_grader.build_kenburns_filter(_dur, direction=getattr(args, "kenburns_direction", "in"))
         if kenburns_fragment:
             print("[INFO] Ken Burns aktif.")
 
@@ -570,6 +570,9 @@ def build_parser():
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
     p.add_argument("--kenburns", action="store_true",
                    help="Ken Burns zoom effect (mode single; dilewati jika durasi >45 detik)")
+    p.add_argument("--kenburns-direction", choices=["in", "out"], default="in",
+                   dest="kenburns_direction",
+                   help="Arah Ken Burns: 'in' (zoom masuk, default) atau 'out' (zoom mundur)")
     p.add_argument("--transition", nargs="+", metavar="JENIS",
                    choices=[
                        "fade", "fadewhite", "slideleft", "slideright",

@@ -31,7 +31,17 @@ VALID_TRANSITIONS = frozenset({
 
 
 def get_clip_duration(path: str) -> float:
-    """Baca durasi klip dengan ffprobe."""
+    """Baca durasi klip dengan ffprobe.
+
+    NOTE: Fungsi ini SENGAJA TIDAK diganti dengan utils.ffprobe_duration() karena
+    perilaku error berbeda secara kritis:
+      - utils.ffprobe_duration() mengembalikan 0.0 saat gagal (silent fallback).
+      - Fungsi ini melempar exception (CalledProcessError / KeyError / ValueError).
+    Di sini, 0.0 adalah nilai yang BERBAHAYA: durasi nol akan menyebabkan
+    _build_xfade_filtergraph() menghasilkan offset negatif dan FFmpeg menolak
+    filtergraph dengan error. Maka raising behavior dipertahankan agar kegagalan
+    terdeteksi lebih awal dengan pesan yang jelas.
+    """
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_entries", "format=duration", path,
