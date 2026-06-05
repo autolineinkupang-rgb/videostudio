@@ -225,6 +225,142 @@ def parse_timestamps(raw: str) -> list:
     return result
 
 
+def _run_single_multi(args, video_path: str, basename: str) -> None:
+    """Pipeline single --multi-clip: 1 video lokal → banyak Short clips."""
+    print("[multi-clip] Pipeline multi-klip dimulai...")
+
+    # 1. Opsional transkripsi (hanya jika --subtitle)
+    segments = []
+    if args.subtitle:
+        print("[1/5] Transkripsi audio...")
+        srt_path = os.path.join(TEMP_DIR, f"{basename}.srt")
+        try:
+            segs, _text, srt = transcriber.transcribe(
+                video_path, model=args.model, engine=args.engine, lang=args.lang, srt_out=srt_path
+            )
+            segments = segs or []
+            if srt:
+                save_subtitle_copy(srt, basename)
+        except Exception as exc:
+            print(f"[WARNING] Transkripsi gagal: {exc}")
+    else:
+        print("[1/5] Transkripsi dilewati (--subtitle tidak aktif).")
+
+    # 2. Tentukan timestamps
+    duration = utils.ffprobe_duration(video_path)
+
+    # Prioritas: --max-clips (hard cap) > --clips-per-minute (kalkulasi) > None (semua momen)
+    max_clips = getattr(args, "max_clips", None)
+    clips_per_minute = getattr(args, "clips_per_minute", None)
+    if clips_per_minute and max_clips is None:
+        max_clips = max(1, int(duration / 60.0 * clips_per_minute))
+        print(f"[INFO] --clips-per-minute {clips_per_minute} × {duration:.0f}s → max_clips={max_clips}")
+    elif clips_per_minute and max_clips is not None:
+        print(f"[INFO] --max-clips {max_clips} aktif — --clips-per-minute diabaikan")
+
+    raw_ts = getattr(args, "timestamps", None)
+    if raw_ts:
+        timestamps = parse_timestamps(raw_ts)
+        if not timestamps:
+            print("[ERROR] --timestamps tidak menghasilkan entri valid.")
+            sys.exit(1)
+        print(f"[INFO] Timestamps manual: {len(timestamps)} entri.")
+    else:
+        print("[2/5] Deteksi momen otomatis...")
+        timestamps_path = os.path.join(TEMP_DIR, "mc_timestamps.json")
+        timestamps = []
+
+        if args.ai_moments:
+            provider = args.ai_provider or os.environ.get("AI_PROVIDER", "gemini")
+            if not segments:
+                print("[WARNING] Tidak ada transkrip untuk AI — fallback heuristik.")
+            elif not ai_client.available(provider):
+                print(f"[WARNING] Key AI '{provider}' tidak ada — fallback heuristik.")
+            else:
+                print(f"[INFO] Pilih momen via AI ({provider})...")
+                timestamps = ai_director.select_moments(
+                    segments, duration, max_clips=max_clips, provider=provider
+                )
+                if timestamps:
+                    print(f"[INFO] AI memilih {len(timestamps)} momen.")
+                else:
+                    print("[WARNING] AI tidak mengembalikan momen — fallback heuristik.")
+
+        if not timestamps:
+            timestamps = moment_detector.detect_moments(
+                video_path, segments, duration=duration, timestamps_out=timestamps_path
+            )
+
+        if not timestamps:
+            print("[ERROR] Tidak ada momen terdeteksi. Pipeline dihentikan.")
+            sys.exit(1)
+        print(f"[INFO] {len(timestamps)} momen siap dipotong.")
+
+    # 3. Color fragment
+    lut = utils.resolve_path(args.lut) if args.lut else color_grader.find_lut(EFEK_DIR)
+    if lut:
+        print(f"[INFO] LUT: {os.path.basename(lut)}")
+        color_fragment = color_grader.build_color_filter(lut=lut, effects=getattr(args, "effects", False))
+    else:
+        color_fragment = color_grader.build_effects_filter() if getattr(args, "effects", False) else ""
+
+    # 4. subtitle_provider closure
+    subtitle_provider = None
+    if args.subtitle:
+        def subtitle_provider(item, idx, start, end):
+            if getattr(args, "no_burn", False):
+                return ""
+            asp = os.path.join(TEMP_DIR, f"mc_clip_{idx:02d}.ass")
+            window = [s for s in segments if s.end > start and s.start < end]
+            ass = None
+            if window:
+                ass = subtitle_burner.make_clip_ass_timed(
+                    window, start, end - start, asp, style=args.style
+                )
+            if not ass:
+                transcript = item.get("transcript", "")
+                if transcript:
+                    ass = subtitle_burner.make_clip_ass(
+                        transcript, end - start, asp, style=args.style
+                    )
+            return subtitle_burner.build_filter(ass) if ass else ""
+
+    # 5. Potong & encode klip
+    print("[3/5] Potong & encode klip...")
+    infos = encoder.cut_clips(
+        video_path, timestamps, CLIPS_DIR, basename,
+        max_clips=max_clips,
+        blur_background=args.blur_background,
+        color_fragment=color_fragment,
+        audio_punchy=getattr(args, "effects", False),
+        subtitle_provider=subtitle_provider,
+        smart_crop=args.smart_crop,
+    )
+
+    # 6. Opsional BGM per klip
+    music = resolve_music(args)
+    if music and infos:
+        print("[4/5] Background music...")
+        for info in infos:
+            try:
+                tmp_out = info["path"] + ".bgm.mp4"
+                audio_mixer.mix_music(info["path"], music, tmp_out, volume=args.music_vol)
+                os.replace(tmp_out, info["path"])
+                info["size_bytes"] = os.path.getsize(info["path"])
+            except Exception as exc:
+                print(f"[WARNING] Gagal mix BGM untuk {info['filename']}: {exc}")
+    else:
+        print("[4/5] Tanpa background music.")
+
+    # 7. Laporan
+    print("[5/5] Laporan akhir...")
+    reporter.generate_report(
+        infos, os.path.join(OUTPUT_DIR, "report.txt"),
+        source=video_path, mode="single-multi", timestamps=timestamps,
+    )
+    print_summary(infos, CLIPS_DIR)
+
+
 # ── MODE SINGLE ───────────────────────────────────────────────────────────────
 
 def run_single(args):
