@@ -260,11 +260,12 @@ def _run_single_multi(args, video_path: str, basename: str) -> None:
 
     raw_ts = getattr(args, "timestamps", None)
     if raw_ts:
+        print("[2/5] Timestamps manual digunakan.")
         timestamps = parse_timestamps(raw_ts)
         if not timestamps:
             print("[ERROR] --timestamps tidak menghasilkan entri valid.")
             sys.exit(1)
-        print(f"[INFO] Timestamps manual: {len(timestamps)} entri.")
+        print(f"[INFO] {len(timestamps)} entri timestamp valid.")
     else:
         print("[2/5] Deteksi momen otomatis...")
         timestamps_path = os.path.join(TEMP_DIR, "mc_timestamps.json")
@@ -282,6 +283,9 @@ def _run_single_multi(args, video_path: str, basename: str) -> None:
                     segments, duration, max_clips=max_clips, provider=provider
                 )
                 if timestamps:
+                    utils.ensure_parent_dir(timestamps_path)
+                    with open(timestamps_path, "w", encoding="utf-8") as fh:
+                        json.dump(timestamps, fh, indent=2, ensure_ascii=False)
                     print(f"[INFO] AI memilih {len(timestamps)} momen.")
                 else:
                     print("[WARNING] AI tidak mengembalikan momen — fallback heuristik.")
@@ -338,7 +342,7 @@ def _run_single_multi(args, video_path: str, basename: str) -> None:
     )
 
     # 6. Opsional BGM per klip
-    music = resolve_music(args)
+    music = None if getattr(args, "no_music", False) else resolve_music(args)
     if music and infos:
         print("[4/5] Background music...")
         for info in infos:
@@ -349,7 +353,7 @@ def _run_single_multi(args, video_path: str, basename: str) -> None:
                 info["size_bytes"] = os.path.getsize(info["path"])
             except Exception as exc:
                 print(f"[WARNING] Gagal mix BGM untuk {info['filename']}: {exc}")
-    else:
+    elif not music:
         print("[4/5] Tanpa background music.")
 
     # 7. Laporan
