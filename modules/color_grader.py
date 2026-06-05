@@ -82,3 +82,28 @@ def build_overlay_filter(
             f":alpha='if(lt(t,0.5),0,1)'"
         )
     return frag
+
+
+def build_kenburns_filter(duration: float, direction: str = "in") -> str:
+    """Zoompan Ken Burns lambat untuk mode single.
+
+    Mengembalikan string kosong jika duration > 45 detik karena zoompan
+    sangat CPU-intensive pada video panjang (i5-8350U tanpa GPU).
+    """
+    if duration > 45.0:
+        print(f"[WARNING] Ken Burns dilewati: durasi {duration:.1f}s > 45s (terlalu berat untuk CPU).")
+        return ""
+    fps = _CFG["video"]["fps"]
+    total_frames = int(duration * fps)
+    w = _CFG["video"]["width"]
+    h = _CFG["video"]["height"]
+    if direction == "out":
+        z_expr = "if(eq(on,1),1.08,max(1.0,zoom-0.0002))"
+    else:
+        z_expr = "min(zoom+0.0002,1.08)"
+    return (
+        f",zoompan=z='{z_expr}'"
+        f":x='iw/2-(iw/zoom/2)'"
+        f":y='ih/2-(ih/zoom/2)'"
+        f":d={total_frames}:s={w}x{h}:fps={fps}"
+    )
