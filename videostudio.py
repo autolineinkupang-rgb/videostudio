@@ -313,6 +313,13 @@ def run_single(args):
     color_fragment = color_grader.build_color_filter(lut=lut, effects=False)
     overlay_fragment = color_grader.build_overlay_filter(text=args.text, channel=args.channel)
 
+    kenburns_fragment = ""
+    if getattr(args, "kenburns", False):
+        _dur = utils.ffprobe_duration(work_input)
+        kenburns_fragment = color_grader.build_kenburns_filter(_dur)
+        if kenburns_fragment:
+            print("[INFO] Ken Burns aktif.")
+
     print("[3/4] Reframe 9:16 + color grade + overlay...")
     reframed = os.path.join(TEMP_DIR, f"{basename}_reframe.mp4")
     try:
@@ -321,6 +328,7 @@ def run_single(args):
             blur_background=args.blur_background, color_fragment=color_fragment,
             overlay_fragment=overlay_fragment, subtitle_fragment=subtitle_fragment,
             smart_crop=args.smart_crop,
+            kenburns_fragment=kenburns_fragment,
         )
     except Exception as exc:
         print(f"[ERROR] Reframe gagal: {exc}")
@@ -553,6 +561,8 @@ def build_parser():
     p.add_argument("--no-smart-crop", dest="smart_crop", action="store_false",
                    help="Matikan smart-crop (pakai center-crop / blur)")
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
+    p.add_argument("--kenburns", action="store_true",
+                   help="Ken Burns zoom effect (mode single; dilewati jika durasi >45 detik)")
     p.add_argument("--ai-moments", action="store_true",
                    help="Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di .env)")
     p.add_argument("--ai-clean", action="store_true",
