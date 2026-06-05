@@ -1,4 +1,4 @@
-import sys, os, shutil, tempfile
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules import transitions
@@ -86,6 +86,26 @@ def test_invalid_transition_raises():
 def test_empty_clips_raises():
     try:
         transitions.concat_with_transitions(clips=[], out_path="out.mp4", transitions=["fade"])
+        assert False, "Harus raise ValueError"
+    except ValueError:
+        pass
+
+
+def test_empty_transitions_list_raises():
+    try:
+        transitions.concat_with_transitions(
+            clips=["a.mp4", "b.mp4"], out_path="out.mp4", transitions=[]
+        )
+        assert False, "Harus raise ValueError"
+    except ValueError as e:
+        assert "transitions" in str(e).lower()
+
+
+def test_negative_td_raises():
+    try:
+        transitions.concat_with_transitions(
+            clips=["a.mp4", "b.mp4"], out_path="out.mp4", transitions=["fade"], td=-1.0
+        )
         assert False, "Harus raise ValueError"
     except ValueError:
         pass

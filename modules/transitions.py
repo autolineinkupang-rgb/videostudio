@@ -5,7 +5,6 @@ concat_with_transitions() menggantikan encoder.concat_segments() bila
 user meminta transisi, sambil menjaga backward-compatibility penuh.
 """
 import json
-import os
 import shutil
 import subprocess
 from typing import List, Tuple
@@ -95,11 +94,17 @@ def concat_with_transitions(
     if not clips:
         raise ValueError("clips tidak boleh kosong")
 
+    if not transitions:
+        raise ValueError("transitions list tidak boleh kosong")
+
     for t in transitions:
         if t not in VALID_TRANSITIONS:
             raise ValueError(
                 f"Transisi tidak dikenal: {t!r}. Pilih dari: {sorted(VALID_TRANSITIONS)}"
             )
+
+    if td <= 0:
+        raise ValueError(f"td harus lebih dari 0, dapat {td}")
 
     if len(clips) == 1:
         utils.ensure_parent_dir(out_path)
