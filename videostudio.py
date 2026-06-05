@@ -206,6 +206,23 @@ def run_clipper(args):
     print_summary(infos, CLIPS_DIR)
 
 
+# ── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
+
+def parse_timestamps(raw: str) -> list:
+    """Konversi '10-45,90-130' ke list dict {start_sec, end_sec}."""
+    result = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or "-" not in part:
+            continue
+        try:
+            s, e = part.split("-", 1)
+            result.append({"start_sec": float(s.strip()), "end_sec": float(e.strip())})
+        except ValueError:
+            pass
+    return result
+
+
 # ── MODE SINGLE ───────────────────────────────────────────────────────────────
 
 def run_single(args):
