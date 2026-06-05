@@ -406,7 +406,14 @@ def run_compile(args):
     print("[3] Menggabungkan semua segmen...")
     merged = os.path.join(TEMP_DIR, "merged.mp4")
     try:
-        encoder.concat_segments(processed, merged, TEMP_DIR)
+        transition_list = getattr(args, "transition", None)
+        if transition_list:
+            from modules import transitions as _trans
+            td = float(CFG.get("effects", {}).get("transition_duration", 0.4))
+            print(f"[INFO] Transisi: {', '.join(transition_list)} (td={td}s)")
+            _trans.concat_with_transitions(processed, merged, transitions=transition_list, td=td)
+        else:
+            encoder.concat_segments(processed, merged, TEMP_DIR)
     except Exception as exc:
         print(f"[ERROR] Gagal menggabungkan: {exc}")
         sys.exit(1)
@@ -563,6 +570,18 @@ def build_parser():
     p.add_argument("--effects", action="store_true", help="Efek warna + audio punchy (clipper)")
     p.add_argument("--kenburns", action="store_true",
                    help="Ken Burns zoom effect (mode single; dilewati jika durasi >45 detik)")
+    p.add_argument("--transition", nargs="+", metavar="JENIS",
+                   choices=[
+                       "fade", "fadewhite", "slideleft", "slideright",
+                       "slideup", "slidedown", "wipeleft", "dissolve",
+                       "zoom", "pixelize", "squeezeh",
+                   ],
+                   help=(
+                       "Transisi antar klip (mode compile). Satu atau lebih: "
+                       "fade fadewhite slideleft slideright slideup slidedown "
+                       "wipeleft dissolve zoom pixelize squeezeh. "
+                       "Contoh: --transition fade slideleft"
+                   ))
     p.add_argument("--ai-moments", action="store_true",
                    help="Pilih cuplikan terbaik via AI/LLM (clipper; perlu API key di .env)")
     p.add_argument("--ai-clean", action="store_true",
