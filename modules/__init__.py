@@ -16,4 +16,5 @@ __all__ = [
     "smart_crop",
     "ai_client",
     "ai_director",
+    "transitions",
 ]
