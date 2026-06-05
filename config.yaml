@@ -46,3 +46,6 @@ compile:
 paths:
   font_bold: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
   font_regular: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+
+effects:
+  transition_duration: 0.4   # detik overlap xfade antar klip (mode compile --transition)
