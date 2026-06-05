@@ -159,6 +159,8 @@ def run_clipper(args):
     subtitle_provider = None
     if args.subtitle:
         def subtitle_provider(item, idx, start, end):
+            if getattr(args, "no_burn", False):
+                return ""
             ass_path = os.path.join(TEMP_DIR, f"clip_{idx:02d}.ass")
             # Subtitle dinamis: segmen Whisper yang overlap jendela klip [start,end].
             window = [s for s in segments if s.end > start and s.start < end]
