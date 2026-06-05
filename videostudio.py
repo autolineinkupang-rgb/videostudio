@@ -324,6 +324,9 @@ def run_single(args):
     else:
         print("[2/4] Subtitle dilewati (tambah --subtitle untuk mengaktifkan).")
 
+    if getattr(args, "no_burn", False):
+        subtitle_fragment = ""
+
     lut = utils.resolve_path(args.lut) if args.lut else color_grader.find_lut(EFEK_DIR)
     if lut:
         print(f"[INFO] LUT: {os.path.basename(lut)}")
@@ -569,6 +572,8 @@ def build_parser():
                    choices=["chrome", "firefox", "edge", "chromium", "brave", "vivaldi", "opera"],
                    help="Ambil cookies dari browser")
     p.add_argument("--subtitle", action="store_true", help="Bakar subtitle ke klip")
+    p.add_argument("--no-burn", action="store_true",
+                   help="Jangan bakar subtitle ke video (tetap simpan .srt jika --subtitle aktif)")
     p.add_argument("--style", choices=["HYPE", "KARAOKE", "PODCAST", "CLEAN"], default="CLEAN", help="Style subtitle")
     p.add_argument("--lut", help="File LUT .cube (mode single & clipper; auto dari efek/ bila kosong)")
     p.add_argument("--music", help="File background music")
