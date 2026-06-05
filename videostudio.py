@@ -616,6 +616,13 @@ def build_parser():
     p.add_argument("--ai-provider", choices=["gemini", "groq"], default=None,
                    help="Provider AI (default: env AI_PROVIDER atau gemini)")
     p.add_argument("--max-clips", type=int, default=None, help="Batasi jumlah klip (clipper)")
+    p.add_argument("--multi-clip", action="store_true",
+                   help="Mode single: hasilkan banyak Short clips (deteksi momen otomatis)")
+    p.add_argument("--timestamps", default=None, metavar="RANGES",
+                   help="Override timestamp manual: '10-45,90-130' (detik). Dipakai dengan --multi-clip")
+    p.add_argument("--clips-per-minute", type=float, default=None, metavar="N",
+                   dest="clips_per_minute",
+                   help="Target jumlah klip per menit video (dipakai dengan --multi-clip)")
     p.add_argument("--duration", type=int, default=CFG["compile"]["target_duration"], help="Durasi target (compile)")
     p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
     return p

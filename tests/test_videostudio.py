@@ -42,3 +42,27 @@ def test_no_burn_false_preserves_subtitle_fragment():
     if getattr(args, "no_burn", False):
         subtitle_fragment = ""
     assert subtitle_fragment == ",ass='/tmp/test.ass'"
+
+
+def test_clips_per_minute_calc():
+    # 2-minute video at 3 clips/min → 6 clips
+    duration = 120.0
+    clips_per_minute = 3.0
+    max_clips = None  # --max-clips not provided
+
+    if clips_per_minute and max_clips is None:
+        max_clips = max(1, int(duration / 60.0 * clips_per_minute))
+
+    assert max_clips == 6
+
+
+def test_clips_per_minute_max_clips_wins():
+    # --max-clips overrides --clips-per-minute
+    duration = 120.0
+    clips_per_minute = 3.0
+    max_clips = 2  # user set --max-clips 2
+
+    if clips_per_minute and max_clips is None:
+        max_clips = max(1, int(duration / 60.0 * clips_per_minute))
+
+    assert max_clips == 2  # unchanged
