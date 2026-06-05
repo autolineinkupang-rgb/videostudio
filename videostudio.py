@@ -383,6 +383,10 @@ def run_single(args):
     basename = utils.sanitize_filename(os.path.splitext(os.path.basename(source))[0])
     work_input = source
 
+    if getattr(args, "multi_clip", False):
+        _run_single_multi(args, source, basename)
+        return
+
     # --- AI clean (opsional): buang filler/jeda/ngelantur lebih dulu ---
     # Menghasilkan video bersih (jadi work_input) + segmen ter-remap utk subtitle.
     ai_clean_segments = None
